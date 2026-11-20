@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#061226" />
   <!-- SHARE_META_START -->
   <meta name="description" content="Ada perasaan yang tak selalu pandai menjadi kata. Jadi, biarkan lagu ini yang bercerita." />
@@ -40,8 +40,10 @@
 
   <header class="topbar container">
     <a class="brand" href="#awal" aria-label="Music Stories, kembali ke awal">
-      <span class="brand-icon">✧</span>
-      <span>zandevaa<span class="brand-light"> / Music Stories</span></span>
+      <span class="brand-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 2.5C12.7 8 16 11.3 21.5 12C16 12.7 12.7 16 12 21.5C11.3 16 8 12.7 2.5 12C8 11.3 11.3 8 12 2.5Z" /></svg>
+      </span>
+      <span class="brand-text">zandevaa<span class="brand-light"> / Music Stories</span></span>
     </a>
     <button class="share-button" id="shareButton" type="button" aria-label="Bagikan tautan playlist">
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -172,8 +174,16 @@
         </div>
         <div class="seek-row">
           <span id="currentTime" class="timecode">0:00</span>
-          <input id="seekBar" class="seek-bar" aria-label="Posisi lagu" type="range" min="0" max="100" step="0.1"
-            value="0" disabled />
+          <div class="seek-control" id="seekControl" style="--progress: 0%">
+            <div class="seek-visual" aria-hidden="true">
+              <div class="seek-rail">
+                <div class="seek-fill"></div>
+              </div>
+              <div class="seek-thumb"></div>
+            </div>
+            <input id="seekBar" class="seek-bar" aria-label="Posisi lagu" type="range" min="0" max="100" step="0.1"
+              value="0" disabled />
+          </div>
           <span id="totalTime" class="timecode">0:00</span>
         </div>
       </div>

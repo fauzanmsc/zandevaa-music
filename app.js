@@ -33,6 +33,7 @@
   const playButton = $('#playButton');
   const previousButton = $('#previousButton');
   const nextButton = $('#nextButton');
+  const seekControl = $('#seekControl');
   const seekBar = $('#seekBar');
   const volumeBar = $('#volumeBar');
   const repeatButton = $('#repeatButton');
@@ -50,6 +51,9 @@
   let activeIndex = 0;
   let ready = false;
   let audioFailed = false;
+  let isSeeking = false;
+  let seekPointerId = null;
+  let pendingSeekTime = 0;
   let followLyrics = true;
   let repeatMode = 'off'; // off: next then stop; all: repeat playlist; one: repeat this song
   let lyricLines = [];
@@ -122,13 +126,19 @@
     const data = ctx.getImageData(0, 0, size, size).data;
 
     const BINS = 24;
+    let totalPixels = 0;
+    let lightSum = 0;
+    let brightPixels = 0;
     const bgBins = Array.from({ length: BINS }, () => ({ w: 0, sin: 0, cos: 0, s: 0 }));
     const accBins = Array.from({ length: BINS }, () => ({ w: 0, sin: 0, cos: 0, s: 0 }));
 
     for (let i = 0; i < data.length; i += 4) {
       if (data[i + 3] < 180) continue;
       const [h, s, l] = rgbToHsl(data[i], data[i + 1], data[i + 2]);
-      if (l < 0.04 || l > 0.94 || s < 0.12) continue;
+      totalPixels++;
+      lightSum += l;
+      if (l > 0.72) brightPixels++;
+      if (l < 0.04 || l > 0.95 || s < 0.12) continue;
       const px = (i / 4) % size;
       const py = Math.floor((i / 4) / size);
       const dx = (px / (size - 1)) - 0.5;
@@ -139,8 +149,8 @@
       const sin = Math.sin(rad);
       const cos = Math.cos(rad);
 
-      if (l <= 0.72) {
-        const wBg = (0.3 + s) * (1 - Math.abs(l - 0.30) * 0.8) * centerBoost;
+      if (l <= 0.82) {
+        const wBg = (0.3 + s) * (1 - Math.abs(l - 0.38) * 0.75) * centerBoost;
         if (wBg > 0) {
           bgBins[idx].w += wBg;
           bgBins[idx].sin += sin * wBg;
@@ -148,8 +158,8 @@
           bgBins[idx].s += s * wBg;
         }
       }
-      if (l >= 0.20 && l <= 0.88 && s >= 0.18) {
-        const wAcc = (s * s) * (0.45 + l) * (1 - Math.abs(l - 0.62) * 0.7) * centerBoost;
+      if (l >= 0.18 && l <= 0.88 && s >= 0.18) {
+        const wAcc = (s * s) * (0.45 + l) * (1 - Math.abs(l - 0.58) * 0.65) * centerBoost;
         if (wAcc > 0) {
           accBins[idx].w += wAcc;
           accBins[idx].sin += sin * wAcc;
@@ -158,6 +168,10 @@
         }
       }
     }
+
+    const avgLight = totalPixels ? lightSum / totalPixels : 0.25;
+    const brightRatio = totalPixels ? brightPixels / totalPixels : 0;
+    const isLight = avgLight > 0.56 || brightRatio > 0.42;
 
     const combineCluster = (bins, center) => {
       let w = 0, sin = 0, cos = 0, s = 0;
@@ -177,7 +191,7 @@
     }
     const baseCluster = bestBgIdx >= 0 ? combineCluster(bgBins, bestBgIdx) : null;
     if (!baseCluster || baseCluster.w < 6) {
-      return { baseH: 225, baseS: 0.14, accentH: 36, accentS: 0.56, roseH: 18, roseS: 0.58 };
+      return { baseH: 225, baseS: 0.16, accentH: 36, accentS: 0.58, roseH: 18, roseS: 0.60, isLight };
     }
 
     const pickAccent = (minDistance) => {
@@ -198,7 +212,8 @@
       accentH: accentCluster.h,
       accentS: accentCluster.s,
       roseH: accentCluster.h,
-      roseS: clamp(accentCluster.s + 0.08, 0.52, 0.86)
+      roseS: clamp(accentCluster.s + 0.08, 0.52, 0.86),
+      isLight
     };
   }
 
@@ -208,53 +223,118 @@
   }
 
   function applyThemePalette(palette) {
+    const isLight = Boolean(palette.isLight);
     const baseH = palette.baseH;
-    const baseS = clamp(palette.baseS, 0.24, 0.64);
+    const baseS = clamp(palette.baseS, 0.26, 0.72);
     const accentH = palette.accentH;
-    const accentS = clamp(palette.accentS, 0.48, 0.80);
+    const accentS = clamp(palette.accentS, 0.48, 0.82);
     const roseH = palette.roseH ?? accentH;
     const roseS = clamp(palette.roseS ?? accentS, 0.52, 0.84);
-    const surfaceH = hueDistance(baseH, roseH) <= 125 ? blendHue(baseH, roseH, 0.24) : baseH;
+    const surfaceH = hueDistance(baseH, roseH) <= 125 ? blendHue(baseH, roseH, 0.22) : baseH;
 
-    const pageHex = hslCss(surfaceH, baseS, 0.08);
-    const bgTop = hslCss(baseH, clamp(baseS + 0.04, 0.28, 0.66), 0.12);
-    const bgBottom = hslCss(surfaceH, baseS, 0.068);
-    const glowARgb = hslToRgb(baseH, clamp(baseS + 0.16, 0.52, 0.84), 0.44);
-    const glowBRgb = hslToRgb(roseH, clamp(roseS * 0.90, 0.48, 0.80), 0.45);
-    const accentRgb = hslToRgb(accentH, accentS, 0.82);
-    const roseRgb = hslToRgb(roseH, roseS, 0.75);
-    const tintRgb = hslToRgb(surfaceH, clamp(baseS * 0.62, 0.18, 0.44), 0.85);
+    let vars;
+    let pageHex;
 
-    const vars = {
-      '--page': pageHex,
-      '--bg-top': bgTop,
-      '--bg-bottom': bgBottom,
-      '--glow-a': rgbToHex(...glowARgb),
-      '--glow-a-rgb': glowARgb.join(', '),
-      '--glow-b': rgbToHex(...glowBRgb),
-      '--glow-b-rgb': glowBRgb.join(', '),
-      '--accent': rgbToHex(...accentRgb),
-      '--accent-rgb': accentRgb.join(', '),
-      '--accent-soft': hslCss(accentH, clamp(accentS * 0.76, 0.34, 0.64), 0.74),
-      '--accent-strong': hslCss(accentH, clamp(accentS + 0.06, 0.52, 0.88), 0.92),
-      '--accent-deep': hslCss(surfaceH, clamp(baseS + 0.06, 0.30, 0.68), 0.10),
-      '--rose': rgbToHex(...roseRgb),
-      '--rose-rgb': roseRgb.join(', '),
-      '--tint-rgb': tintRgb.join(', '),
-      '--tint-strong': hslCss(surfaceH, clamp(baseS * 0.85, 0.25, 0.66), 0.89),
-      '--tint-mid': hslCss(surfaceH, clamp(baseS * 0.45, 0.14, 0.30), 0.83),
-      '--dim': hslCss(surfaceH, clamp(baseS * 0.36, 0.12, 0.24), 0.71),
-      '--muted': hslCss(surfaceH, clamp(baseS * 0.34, 0.10, 0.22), 0.58),
-      '--card-top': hslCss(surfaceH, clamp(baseS + 0.02, 0.26, 0.62), 0.175, 0.82),
-      '--card-mid': hslCss(surfaceH, baseS, 0.11, 0.91),
-      '--card-bottom': hslCss(surfaceH, baseS, 0.095, 0.92),
-      '--panel-top': hslCss(surfaceH, clamp(baseS + 0.02, 0.26, 0.62), 0.17, 0.86),
-      '--panel-bottom': hslCss(surfaceH, baseS, 0.115, 0.74),
-      '--dock-bg': hslCss(surfaceH, baseS, 0.074, 0.93),
-      '--scroll-thumb': hslCss(surfaceH, clamp(baseS * 0.55, 0.16, 0.36), 0.35),
-      '--track-rail': hslCss(surfaceH, clamp(baseS * 0.46, 0.14, 0.30), 0.29)
-    };
+    if (isLight) {
+      const primaryAccentH = baseH;
+      const primaryAccentS = clamp(baseS + 0.22, 0.50, 0.78);
+      const warmRoseH = accentH;
+      const warmRoseS = clamp(accentS, 0.56, 0.84);
+      pageHex = hslCss(baseH, clamp(baseS * 0.68, 0.20, 0.44), 0.955);
+      const bgTop = hslCss(baseH, clamp(baseS * 0.78, 0.24, 0.52), 0.925);
+      const bgBottom = hslCss(warmRoseH, clamp(warmRoseS * 0.45, 0.16, 0.36), 0.945);
+      const glowARgb = hslToRgb(baseH, clamp(baseS + 0.26, 0.52, 0.82), 0.68);
+      const glowBRgb = hslToRgb(warmRoseH, clamp(warmRoseS, 0.56, 0.84), 0.72);
+      const accentRgb = hslToRgb(primaryAccentH, primaryAccentS, 0.42);
+      const roseRgb = hslToRgb(warmRoseH, warmRoseS, 0.50);
+      const tintRgb = hslToRgb(baseH, clamp(baseS * 0.75, 0.24, 0.48), 0.28);
 
+      vars = {
+        '--page': pageHex,
+        '--bg-top': bgTop,
+        '--bg-bottom': bgBottom,
+        '--glow-a': rgbToHex(...glowARgb),
+        '--glow-a-rgb': glowARgb.join(', '),
+        '--glow-b': rgbToHex(...glowBRgb),
+        '--glow-b-rgb': glowBRgb.join(', '),
+        '--ink': hslCss(baseH, clamp(baseS + 0.12, 0.34, 0.60), 0.14),
+        '--dim': hslCss(baseH, clamp(baseS * 0.55, 0.18, 0.34), 0.34),
+        '--muted': hslCss(baseH, clamp(baseS * 0.45, 0.14, 0.28), 0.46),
+        '--accent': rgbToHex(...accentRgb),
+        '--accent-rgb': accentRgb.join(', '),
+        '--accent-soft': hslCss(warmRoseH, clamp(warmRoseS * 0.85, 0.44, 0.74), 0.44),
+        '--accent-strong': hslCss(baseH, clamp(baseS + 0.16, 0.40, 0.66), 0.20),
+        '--accent-deep': '#ffffff',
+        '--rose': rgbToHex(...roseRgb),
+        '--rose-rgb': roseRgb.join(', '),
+        '--tint-rgb': tintRgb.join(', '),
+        '--tint-strong': hslCss(baseH, clamp(baseS + 0.10, 0.30, 0.58), 0.42),
+        '--tint-mid': hslCss(baseH, clamp(baseS * 0.55, 0.18, 0.36), 0.25),
+        '--card-top': 'rgba(255, 255, 255, 0.78)',
+        '--card-mid': 'rgba(248, 250, 255, 0.84)',
+        '--card-bottom': 'rgba(243, 247, 254, 0.88)',
+        '--panel-top': 'rgba(255, 255, 255, 0.76)',
+        '--panel-bottom': 'rgba(244, 247, 253, 0.68)',
+        '--dock-bg': 'rgba(255, 255, 255, 0.86)',
+        '--topbar-bg': 'rgba(248, 250, 255, 0.76)',
+        '--scroll-thumb': hslCss(baseH, clamp(baseS * 0.55, 0.20, 0.40), 0.68),
+        '--track-rail': hslCss(baseH, clamp(baseS * 0.45, 0.18, 0.34), 0.20, 0.16),
+        '--surface-hover': hslCss(baseH, clamp(baseS * 0.50, 0.20, 0.38), 0.22, 0.09),
+        '--surface-subtle': hslCss(baseH, clamp(baseS * 0.50, 0.20, 0.38), 0.22, 0.05),
+        '--play-bg-a': hslCss(primaryAccentH, primaryAccentS, 0.44),
+        '--play-bg-b': hslCss(primaryAccentH, clamp(primaryAccentS + 0.08, 0.54, 0.82), 0.30),
+        '--play-ink': '#ffffff'
+      };
+    } else {
+      const darkSat = clamp(baseS, 0.32, 0.68);
+      pageHex = hslCss(surfaceH, darkSat, 0.105);
+      const bgTop = hslCss(baseH, clamp(darkSat + 0.08, 0.38, 0.74), 0.185);
+      const bgBottom = hslCss(surfaceH, darkSat, 0.082);
+      const glowARgb = hslToRgb(baseH, clamp(darkSat + 0.16, 0.56, 0.88), 0.48);
+      const glowBRgb = hslToRgb(roseH, clamp(roseS * 0.92, 0.52, 0.84), 0.48);
+      const accentRgb = hslToRgb(accentH, accentS, 0.82);
+      const roseRgb = hslToRgb(roseH, roseS, 0.76);
+      const tintRgb = hslToRgb(surfaceH, clamp(darkSat * 0.62, 0.20, 0.48), 0.86);
+
+      vars = {
+        '--page': pageHex,
+        '--bg-top': bgTop,
+        '--bg-bottom': bgBottom,
+        '--glow-a': rgbToHex(...glowARgb),
+        '--glow-a-rgb': glowARgb.join(', '),
+        '--glow-b': rgbToHex(...glowBRgb),
+        '--glow-b-rgb': glowBRgb.join(', '),
+        '--ink': '#f2f5fa',
+        '--dim': hslCss(surfaceH, clamp(darkSat * 0.38, 0.14, 0.28), 0.75),
+        '--muted': hslCss(surfaceH, clamp(darkSat * 0.36, 0.12, 0.26), 0.62),
+        '--accent': rgbToHex(...accentRgb),
+        '--accent-rgb': accentRgb.join(', '),
+        '--accent-soft': hslCss(accentH, clamp(accentS * 0.78, 0.38, 0.68), 0.75),
+        '--accent-strong': hslCss(accentH, clamp(accentS + 0.06, 0.54, 0.90), 0.93),
+        '--accent-deep': hslCss(surfaceH, clamp(darkSat + 0.06, 0.34, 0.70), 0.11),
+        '--rose': rgbToHex(...roseRgb),
+        '--rose-rgb': roseRgb.join(', '),
+        '--tint-rgb': tintRgb.join(', '),
+        '--tint-strong': hslCss(surfaceH, clamp(darkSat * 0.85, 0.28, 0.70), 0.89),
+        '--tint-mid': hslCss(surfaceH, clamp(darkSat * 0.45, 0.16, 0.34), 0.85),
+        '--card-top': hslCss(surfaceH, clamp(darkSat + 0.04, 0.32, 0.68), 0.21, 0.78),
+        '--card-mid': hslCss(surfaceH, darkSat, 0.14, 0.86),
+        '--card-bottom': hslCss(surfaceH, darkSat, 0.115, 0.90),
+        '--panel-top': hslCss(surfaceH, clamp(darkSat + 0.04, 0.32, 0.68), 0.20, 0.82),
+        '--panel-bottom': hslCss(surfaceH, darkSat, 0.135, 0.76),
+        '--dock-bg': hslCss(surfaceH, clamp(darkSat + 0.04, 0.32, 0.68), 0.115, 0.84),
+        '--topbar-bg': hslCss(surfaceH, darkSat, 0.11, 0.72),
+        '--scroll-thumb': hslCss(surfaceH, clamp(darkSat * 0.55, 0.20, 0.40), 0.40),
+        '--track-rail': 'rgba(255, 255, 255, 0.18)',
+        '--surface-hover': 'rgba(255, 255, 255, 0.08)',
+        '--surface-subtle': 'rgba(255, 255, 255, 0.045)',
+        '--play-bg-a': hslCss(accentH, clamp(accentS + 0.06, 0.54, 0.90), 0.93),
+        '--play-bg-b': rgbToHex(...accentRgb),
+        '--play-ink': hslCss(surfaceH, clamp(darkSat + 0.06, 0.34, 0.70), 0.11)
+      };
+    }
+
+    document.documentElement.dataset.themeMode = isLight ? 'light' : 'dark';
     const rootStyle = document.documentElement.style;
     for (const [name, value] of Object.entries(vars)) rootStyle.setProperty(name, value);
     setMetaContent('meta[name="theme-color"]', pageHex);
@@ -413,17 +493,27 @@
     });
   }
 
+  function setSeekVisual(percentage) {
+    const clamped = clamp(percentage, 0, 100);
+    seekBar.value = String(clamped);
+    if (seekControl) seekControl.style.setProperty('--progress', `${clamped}%`);
+  }
+
   function setReady(value) {
     ready = value;
     seekBar.disabled = !value;
+    if (seekControl) seekControl.classList.toggle('is-disabled', !value);
     if (value) {
       audioFailed = false;
-      audioHint.textContent = localAudioOverrides.has(currentTrack().id)
-        ? `♪ MP3 lokal untuk “${currentTrack().title}” siap diputar. File ini belum diunggah ke GitHub.`
+      const isLocal = localAudioOverrides.has(currentTrack().id);
+      audioHint.textContent = isLocal
+        ? `♪ MP3 lokal untuk “${currentTrack().title}” siap diputar.`
         : `♪ “${currentTrack().title}” siap didengarkan.`;
       audioHint.classList.add('has-track');
+      audioHint.hidden = !isLocal;
     } else {
       audioHint.classList.remove('has-track');
+      audioHint.hidden = false;
     }
     updatePlayState();
   }
@@ -448,13 +538,13 @@
   }
 
   function progress() {
-    const elapsed = audio.currentTime || 0;
     const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
-    $('#currentTime').textContent = timeString(elapsed);
     $('#totalTime').textContent = timeString(duration);
-    const percentage = duration ? Math.min(100, Math.max(0, elapsed / duration * 100)) : 0;
-    seekBar.value = String(percentage);
-    seekBar.style.setProperty('--progress', `${percentage}%`);
+    if (isSeeking) return;
+    const elapsed = audio.currentTime || 0;
+    $('#currentTime').textContent = timeString(elapsed);
+    const percentage = duration ? clamp(elapsed / duration * 100, 0, 100) : 0;
+    setSeekVisual(percentage);
     syncActiveLyric(elapsed);
   }
 
@@ -655,10 +745,12 @@
     populateTrackInfo(track);
     renderPlaylist();
     setReady(false);
+    isSeeking = false;
+    seekPointerId = null;
+    if (seekControl) seekControl.classList.remove('is-seeking');
     $('#currentTime').textContent = '0:00';
     $('#totalTime').textContent = '0:00';
-    seekBar.value = '0';
-    seekBar.style.setProperty('--progress', '0%');
+    setSeekVisual(0);
     audioHint.textContent = `Memuat sumber musik “${track.title}”…`;
     loadLyricsForTrack(track, requestId);
     if (updateUrl) updatePageLink(track);
@@ -733,11 +825,71 @@
     updatePlayState();
   });
 
+  function scrubToClientX(clientX, { commit = false } = {}) {
+    if (!ready || !Number.isFinite(audio.duration) || audio.duration <= 0 || !seekControl) return;
+    const rect = seekControl.getBoundingClientRect();
+    if (!rect.width) return;
+    const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
+    const targetTime = ratio * audio.duration;
+    pendingSeekTime = targetTime;
+    setSeekVisual(ratio * 100);
+    $('#currentTime').textContent = timeString(targetTime);
+    syncActiveLyric(targetTime);
+    if (commit) audio.currentTime = targetTime;
+  }
+
+  if (seekControl) {
+    seekControl.addEventListener('pointerdown', (event) => {
+      if (!ready || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      event.preventDefault();
+      isSeeking = true;
+      seekPointerId = event.pointerId;
+      seekControl.classList.add('is-seeking');
+      try { seekControl.setPointerCapture(event.pointerId); } catch (_e) { /* Optional. */ }
+      scrubToClientX(event.clientX, { commit: false });
+    });
+    seekControl.addEventListener('pointermove', (event) => {
+      if (!isSeeking || event.pointerId !== seekPointerId) return;
+      event.preventDefault();
+      scrubToClientX(event.clientX, { commit: false });
+    });
+    const finishSeek = (event) => {
+      if (!isSeeking || event.pointerId !== seekPointerId) return;
+      scrubToClientX(event.clientX, { commit: true });
+      isSeeking = false;
+      seekPointerId = null;
+      seekControl.classList.remove('is-seeking');
+      try { seekControl.releasePointerCapture(event.pointerId); } catch (_e) { /* Optional. */ }
+      progress();
+    };
+    seekControl.addEventListener('pointerup', finishSeek);
+    seekControl.addEventListener('pointercancel', (event) => {
+      if (!isSeeking || event.pointerId !== seekPointerId) return;
+      if (Number.isFinite(pendingSeekTime)) audio.currentTime = pendingSeekTime;
+      isSeeking = false;
+      seekPointerId = null;
+      seekControl.classList.remove('is-seeking');
+      progress();
+    });
+  }
+
+  // Keyboard & assistive technology fallback for the underlying range input.
   seekBar.addEventListener('input', () => {
-    if (!ready || !Number.isFinite(audio.duration)) return;
-    audio.currentTime = Number(seekBar.value) / 100 * audio.duration;
+    if (isSeeking || !ready || !Number.isFinite(audio.duration)) return;
+    const pct = clamp(Number(seekBar.value), 0, 100);
+    audio.currentTime = pct / 100 * audio.duration;
+    setSeekVisual(pct);
     progress();
   });
+
+  // Prevent mobile pinch-zoom gestures while preserving normal scroll & seek scrubbing.
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach((type) => {
+    document.addEventListener(type, (event) => event.preventDefault(), { passive: false });
+  });
+  document.addEventListener('touchmove', (event) => {
+    if (event.touches.length > 1) event.preventDefault();
+  }, { passive: false });
   volumeBar.addEventListener('input', () => { audio.volume = Number(volumeBar.value); });
   repeatButton.addEventListener('click', () => {
     repeatMode = { off: 'all', all: 'one', one: 'off' }[repeatMode];
