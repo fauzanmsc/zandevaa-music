@@ -19,14 +19,14 @@ window.PLAYLIST_TRACKS = [
   },
   {
     id: 'lagu-kedua',
-    title: 'Lagu Kedua', // Ganti dengan judul lagu ke-2 Anda.
+    title: 'S-Y-I-F-A (Always-on-My-Mind)', // Ganti dengan judul lagu ke-2 Anda.
     artist: 'Zandevaa',
-    audio: 'assets/lagu-kedua.mp3', // Isi file MP3 lagu ke-2 di sini.
+    audio: 'assets/S-Y-I-F-A (Always-on-My-Mind).mp3', // Isi file MP3 lagu ke-2 di sini.
     cover: 'assets/cover-lagu-kedua.svg', // Ganti ke cover asli: JPG/PNG/WEBP.
     lyricFile: 'lyrics/lagu-kedua.txt', // File lirik independen dari lagu 1.
     lrcFile: 'lyrics/lagu-kedua.lrc',
     description: 'Setiap lagu adalah satu cerita baru yang ingin kusampaikan.',
     dedication: 'Cerita selanjutnya, untuk seseorang yang istimewa.',
-    date: 'COMING SOON'
+    date: '18.11.2026'
   }
 ];
