@@ -28,5 +28,17 @@ window.PLAYLIST_TRACKS = [
     description: 'Setiap lagu adalah satu cerita baru yang ingin kusampaikan.',
     dedication: 'Cerita selanjutnya, untuk seseorang yang istimewa.',
     date: '18.11.2026'
+  },
+  {
+    id: 'you',
+    title: 'You!',
+    artist: 'Zandevaa',
+    audio: 'assets/You!.mp3',
+    cover: 'assets/cover-3.png', // Simpan cover lagu ke-3 di assets/cover-3.png.
+    lyricFile: 'lyrics/you.txt',
+    lrcFile: 'lyrics/you.lrc',
+    description: 'Satu kata sederhana, tapi selalu cukup untuk menggambarkan semuanya.',
+    dedication: 'Karena pada akhirnya, jawabannya selalu kamu.',
+    date: '20.11.2026'
   }
 ];
