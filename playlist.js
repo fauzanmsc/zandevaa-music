@@ -18,7 +18,7 @@ window.PLAYLIST_TRACKS = [
     date: '18.11.2026'
   },
   {
-    id: 'lagu-kedua',
+    id: 'S-Y-I-F-A',
     title: 'S-Y-I-F-A (Always-on-My-Mind)', // Ganti dengan judul lagu ke-2 Anda.
     artist: 'Zandevaa',
     audio: 'assets/S-Y-I-F-A (Always-on-My-Mind).mp3', // Isi file MP3 lagu ke-2 di sini.
