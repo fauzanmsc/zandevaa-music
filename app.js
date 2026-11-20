@@ -1,5 +1,5 @@
 /**
- * Music Letters — Multi-song music & lyric player for GitHub Pages.
+ * Music Stories — Multi-song music & lyric player for GitHub Pages.
  * Edit playlist.js to add any number of tracks; each has its own audio, cover and lyric file.
  */
 (() => {
@@ -93,7 +93,7 @@
     else if (h < 180) [r, g, b] = [0, c, x];
     else if (h < 240) [r, g, b] = [0, x, c];
     else if (h < 300) [r, g, b] = [x, 0, c];
-    else [r, g, b] = [c, 0, x];
+    else[r, g, b] = [c, 0, x];
     return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
   }
 
@@ -357,7 +357,7 @@
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist,
-        album: 'Music Letters',
+        album: 'Music Stories',
         artwork: [{ src: coverUrl }]
       });
     }
@@ -807,9 +807,9 @@
     const normalizedParam = rawSongParam ? rawSongParam.trim().toLowerCase() : '';
     const index = normalizedParam
       ? tracks.findIndex(track =>
-          track.id.toLowerCase() === normalizedParam ||
-          track.title.toLowerCase() === normalizedParam
-        )
+        track.id.toLowerCase() === normalizedParam ||
+        track.title.toLowerCase() === normalizedParam
+      )
       : -1;
     updateRepeatUi();
     switchTrack(index >= 0 ? index : 0, { updateUrl: IS_HTTP || index >= 0 });

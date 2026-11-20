@@ -1,4 +1,4 @@
-# ♡ Music Letters — Untukmu Syifa | Multi-Song Website
+# ♡ Music Stories — Untukmu Syifa | Multi-Song Website
 
 Website musik personal Zandevaa dengan **playlist multi-lagu**, cover dan lirik per lagu, siap untuk GitHub Pages. Dibangun dengan HTML, CSS, dan JavaScript murni (tanpa framework, backend, atau build).
 

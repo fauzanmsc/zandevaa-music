@@ -1,6 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#1d5c90"/><stop offset="1" stop-color="#081229"/></linearGradient></defs>
-  <rect width="64" height="64" rx="18" fill="url(#g)"/>
-  <path d="M21 44c17-2 9-25 25-24M18 19l4.5 4.5L27 19l-4.5-4.5L18 19Z" stroke="#f0dbb6" stroke-width="3" fill="none" stroke-linecap="round"/>
-  <circle cx="43" cy="22" r="4" fill="#ff8b83"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#131c2e"/>
+      <stop offset="1" stop-color="#070c16"/>
+    </linearGradient>
+    <linearGradient id="vinyl" x1="28" y1="16" x2="55" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2b374d"/>
+      <stop offset="0.48" stop-color="#141c2b"/>
+      <stop offset="1" stop-color="#0c111c"/>
+    </linearGradient>
+    <linearGradient id="label" x1="35" y1="27" x2="45" y2="37" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e39c7a"/>
+      <stop offset="1" stop-color="#c46b50"/>
+    </linearGradient>
+    <linearGradient id="sleeve" x1="9" y1="14" x2="37" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f7efe2"/>
+      <stop offset="1" stop-color="#dfd0b8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Matte Midnight Tile -->
+  <rect width="64" height="64" rx="15" fill="url(#bg)"/>
+  <rect x="1" y="1" width="62" height="62" rx="14" stroke="#ffffff" stroke-opacity="0.11" stroke-width="1.2"/>
+
+  <!-- Peeking Vinyl Disc -->
+  <circle cx="40" cy="32" r="15.5" fill="url(#vinyl)" stroke="#7c92b3" stroke-opacity="0.4" stroke-width="1.2"/>
+  <circle cx="40" cy="32" r="12.2" stroke="#c8d6eb" stroke-opacity="0.2" stroke-width="0.9"/>
+  <circle cx="40" cy="32" r="9.2" stroke="#c8d6eb" stroke-opacity="0.16" stroke-width="0.85"/>
+  <circle cx="40" cy="32" r="5" fill="url(#label)"/>
+  <circle cx="40" cy="32" r="1.65" fill="#0b111d"/>
+
+  <!-- Soft Shadow Cast by Story Sleeve -->
+  <rect x="36.5" y="15.5" width="3.2" height="33" fill="#04070e" fill-opacity="0.45"/>
+
+  <!-- Minimalist Personal Story Journal / Record Sleeve -->
+  <rect x="9" y="14" width="28" height="36" rx="3" fill="url(#sleeve)"/>
+  <line x1="14.2" y1="14.5" x2="14.2" y2="49.5" stroke="#8c7860" stroke-opacity="0.32" stroke-width="1.1"/>
+
+  <!-- Editorial Minimal Liner-Note Typography -->
+  <rect x="18.2" y="22.8" width="12.8" height="2.4" rx="1.2" fill="#172236"/>
+  <rect x="18.2" y="27.8" width="8.6" height="1.6" rx="0.8" fill="#52627a"/>
+  <rect x="18.2" y="41.4" width="6.2" height="1.8" rx="0.9" fill="#c97458"/>
 </svg>
