@@ -1,0 +1,1 @@
+Masukkan untukmu-syifa.mp3 dan lagu-kedua.mp3 di folder ini, atau ganti path audio di playlist.js. MP3 belum termasuk dalam paket.
