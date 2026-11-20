@@ -227,11 +227,17 @@ function syncRootIndex(firstTrack, siteUrl) {
   const metaBlock = buildShareMetaBlock({ title: fullTitle, description, image, pageUrl: siteUrl });
 
   const markerRegex = /[ \t]*<!-- SHARE_META_START -->[\s\S]*?<!-- SHARE_META_END -->/;
-  if (!markerRegex.test(indexHtml)) {
+  const currentMatch = indexHtml.match(markerRegex);
+  if (!currentMatch) {
     throw new Error('Marker <!-- SHARE_META_START --> ... <!-- SHARE_META_END --> tidak ditemukan di index.html');
+  }
+  const normalizeWs = (s) => s.replace(/\s+/g, ' ').trim();
+  if (normalizeWs(currentMatch[0]) === normalizeWs(metaBlock)) {
+    return false;
   }
   const updated = indexHtml.replace(markerRegex, metaBlock);
   fs.writeFileSync(INDEX_PATH, updated, 'utf8');
+  return true;
 }
 
 function main() {

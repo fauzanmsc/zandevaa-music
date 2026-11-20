@@ -7,6 +7,8 @@ on:
       - 'playlist.js'
       - 'assets/**'
       - '!assets/og/**'
+      - '!assets/favicon.svg'
+      - '!assets/*.mp3'
       - 'scripts/generate-share-pages.mjs'
   workflow_dispatch:
 
