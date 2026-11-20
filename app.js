@@ -30,9 +30,12 @@
     if (el && content) el.setAttribute('content', content);
   }
   const audio = $('#audio');
+  const musicDock = $('#musicDock');
+  const miniProgressFill = $('#miniProgressFill');
   const playButton = $('#playButton');
   const previousButton = $('#previousButton');
   const nextButton = $('#nextButton');
+  const shuffleButton = $('#shuffleButton');
   const seekControl = $('#seekControl');
   const seekBar = $('#seekBar');
   const volumeBar = $('#volumeBar');
@@ -48,19 +51,87 @@
   const playlistList = $('#playlistList');
   const toast = $('#toast');
 
+  // New UI refs (Full-Screen Now Playing, Focus Lyrics, Sleep Timer, Lyric Card Studio, Favorites)
+  const nowPlayingSheet = $('#nowPlayingSheet');
+  const sheetSeekControl = $('#sheetSeekControl');
+  const sheetSeekBar = $('#sheetSeekBar');
+  const sheetLyricsScroll = $('#sheetLyricsScroll');
+  const sheetLyricsContent = $('#sheetLyricsContent');
+  const visualizerCanvas = $('#visualizerCanvas');
+  const sleepTimerModal = $('#sleepTimerModal');
+  const lyricCardModal = $('#lyricCardModal');
+  const lyricCardCanvas = $('#lyricCardCanvas');
+  const lyricCardLinesEl = $('#lyricCardLines');
+
+  const STORAGE_KEY = 'zandevaa_music_prefs_v1';
+  function loadPrefs() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (_e) { return {}; }
+  }
+  const prefs = loadPrefs();
+  function savePrefs() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        favorites: [...favorites],
+        shuffle: shuffleMode,
+        repeatMode,
+        volume: targetVolume,
+        lastTrackId: currentTrack()?.id || '',
+        lastTime: Number.isFinite(audio.currentTime) ? Math.floor(audio.currentTime) : 0
+      }));
+    } catch (_e) { /* Ignore private browsing quota errors. */ }
+  }
+
   let activeIndex = 0;
+  let upcomingIndex = 0;
   let ready = false;
   let audioFailed = false;
   let isSeeking = false;
   let seekPointerId = null;
+  let activeSeekControl = null;
   let pendingSeekTime = 0;
   let followLyrics = true;
-  let repeatMode = 'off'; // off: next then stop; all: repeat playlist; one: repeat this song
+  let shuffleMode = Boolean(prefs.shuffle);
+  let repeatMode = ['off', 'all', 'one'].includes(prefs.repeatMode) ? prefs.repeatMode : 'off';
+  let targetVolume = Number.isFinite(prefs.volume) ? Math.min(1, Math.max(0, prefs.volume)) : Number(volumeBar.value || 0.85);
+  let favorites = new Set(Array.isArray(prefs.favorites) ? prefs.favorites : []);
   let lyricLines = [];
+  let sheetLyricLines = [];
+  let currentSections = [];
+  let currentRawLyrics = '';
   let lastActiveLine = -1;
   let lyricRequest = 0;
   let themeRequest = 0;
   let toastTimer = null;
+  let currentPalette = null;
+  let isSheetOpen = false;
+  let activeSheetTab = 'player';
+  let isMiniDock = false;
+  let pendingRestoreTime = 0;
+  let lastSavedSecond = -1;
+
+  // Web Audio API (Visualizer + smooth fade)
+  let audioCtx = null;
+  let gainNode = null;
+  let analyserNode = null;
+  let freqData = null;
+  let audioGraphReady = false;
+  let audioGraphFailed = false;
+  let visualizerRaf = null;
+  let pauseFadeTimer = null;
+
+  // Sleep Timer state
+  let sleepMode = 'off'; // 'off' | 'end-of-track' | 'minutes'
+  let sleepEndTimestamp = 0;
+  let sleepTickInterval = null;
+
+  // Share Lyric Card state
+  let lyricCardRatio = 'story'; // 'story' (9:16) | 'post' (4:5)
+  let selectedCardLineIndices = [];
+  let cardCoverImage = null;
+
   const localAudioOverrides = new Map();
   const paletteCache = new Map();
   const DEFAULT_PALETTE = { baseH: 215, baseS: 0.62, accentH: 34, accentS: 0.68, roseH: 6, roseS: 0.80 };
@@ -334,10 +405,12 @@
       };
     }
 
+    currentPalette = { ...palette, isLight, pageHex };
     document.documentElement.dataset.themeMode = isLight ? 'light' : 'dark';
     const rootStyle = document.documentElement.style;
     for (const [name, value] of Object.entries(vars)) rootStyle.setProperty(name, value);
     setMetaContent('meta[name="theme-color"]', pageHex);
+    if (!lyricCardModal.hidden) renderLyricCard();
   }
 
   function applyTrackTheme(track, coverUrl) {
@@ -419,9 +492,17 @@
     $('#playerCover').src = coverUrl;
     $('#playerTitle').textContent = track.title;
     $('#playerArtist').textContent = artist;
+    $('#sheetCover').src = coverUrl;
+    $('#sheetCover').alt = `Cover lagu ${track.title}`;
+    $('#sheetTitle').textContent = track.title;
+    $('#sheetArtist').textContent = artist;
+    $('#sheetLyricsTrackTitle').textContent = track.title;
+    $('#sheetLyricsTrackArtist').textContent = artist;
     $('#lyricsTrackTitle').textContent = track.title.toUpperCase();
     document.documentElement.style.setProperty('--cover-bg', `url("${coverUrl}")`);
     applyTrackTheme(track, coverUrl);
+    updateFavoriteUi();
+    refreshUpcomingTrack();
     document.title = fullTitle;
     setMetaContent('meta[name="description"]', description);
     setMetaContent('meta[property="og:title"]', fullTitle);
@@ -465,6 +546,13 @@
       details.className = 'playlist-details';
       const title = document.createElement('strong');
       title.textContent = track.title;
+      if (favorites.has(track.id)) {
+        const heart = document.createElement('span');
+        heart.className = 'playlist-fav-mark';
+        heart.textContent = '♥';
+        heart.setAttribute('aria-label', 'Favorit');
+        title.append(heart);
+      }
       const artist = document.createElement('small');
       artist.textContent = track.artist || 'Zandevaa';
       details.append(title, artist);
@@ -483,26 +571,178 @@
     document.body.classList.toggle('is-playing', playing);
     playButton.setAttribute('aria-label', playing ? 'Jeda lagu' : `Putar ${currentTrack()?.title || 'lagu'}`);
     playButton.title = playing ? 'Jeda' : 'Putar';
-    if (playing) trackState.textContent = 'NOW PLAYING';
-    else if (audioFailed) trackState.textContent = 'MP3 BELUM TERSEDIA';
-    else if (ready) trackState.textContent = 'READY TO PLAY';
-    else trackState.textContent = 'LOADING AUDIO';
-    // Keep selected row visible as the playing song changes.
+    if (playing) {
+      trackState.textContent = 'NOW PLAYING';
+      startVisualizerLoop();
+    } else {
+      stopVisualizerLoop();
+      if (audioFailed) trackState.textContent = 'MP3 BELUM TERSEDIA';
+      else if (ready) trackState.textContent = 'READY TO PLAY';
+      else trackState.textContent = 'LOADING AUDIO';
+    }
     playlistList.querySelectorAll('.playlist-item').forEach((row) => {
       row.classList.toggle('currently-playing', playing && Number(row.dataset.trackIndex) === activeIndex);
     });
+    updateMediaPositionState();
+  }
+
+  function ensureAudioGraph() {
+    if (audioGraphReady || audioGraphFailed) return;
+    if (!IS_HTTP && !String(audio.src || '').startsWith('blob:')) return;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) { audioGraphFailed = true; return; }
+    try {
+      audioCtx = new AudioCtx();
+      const source = audioCtx.createMediaElementSource(audio);
+      gainNode = audioCtx.createGain();
+      analyserNode = audioCtx.createAnalyser();
+      analyserNode.fftSize = 128;
+      analyserNode.smoothingTimeConstant = 0.82;
+      freqData = new Uint8Array(analyserNode.frequencyBinCount);
+      gainNode.gain.value = targetVolume;
+      source.connect(gainNode);
+      gainNode.connect(analyserNode);
+      analyserNode.connect(audioCtx.destination);
+      audio.volume = 1;
+      audioGraphReady = true;
+    } catch (_e) {
+      audioGraphFailed = true;
+      audio.volume = targetVolume;
+    }
+  }
+
+  function setOutputVolume(val) {
+    targetVolume = clamp(val, 0, 1);
+    if (audioGraphReady && gainNode && audioCtx) {
+      const now = audioCtx.currentTime;
+      gainNode.gain.cancelScheduledValues(now);
+      gainNode.gain.setTargetAtTime(targetVolume, now, 0.03);
+    } else {
+      audio.volume = targetVolume;
+    }
+    savePrefs();
+  }
+
+  function startVisualizerLoop() {
+    if (visualizerRaf) return;
+    const ctx = visualizerCanvas?.getContext('2d');
+    const barCount = 34;
+    let phase = 0;
+
+    const draw = () => {
+      visualizerRaf = requestAnimationFrame(draw);
+      const playing = !audio.paused && !audio.ended;
+      if (!playing) { stopVisualizerLoop(); return; }
+
+      phase += 0.09;
+      let bassEnergy = 0;
+
+      if (audioGraphReady && analyserNode && freqData) {
+        analyserNode.getByteFrequencyData(freqData);
+        let sum = 0;
+        for (let i = 0; i < 6; i++) sum += freqData[i];
+        bassEnergy = clamp(sum / (6 * 255), 0, 1);
+      } else {
+        bassEnergy = 0.25 + 0.18 * Math.abs(Math.sin(phase * 1.1));
+      }
+
+      document.documentElement.style.setProperty('--beat-pulse', bassEnergy.toFixed(3));
+
+      if (!ctx || !isSheetOpen || activeSheetTab !== 'player') return;
+      const w = visualizerCanvas.width;
+      const h = visualizerCanvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const style = getComputedStyle(document.documentElement);
+      const accentColor = style.getPropertyValue('--accent').trim() || '#f1cfa8';
+      const roseColor = style.getPropertyValue('--rose').trim() || '#f2968e';
+      const grad = ctx.createLinearGradient(0, 0, w, 0);
+      grad.addColorStop(0, accentColor);
+      grad.addColorStop(0.5, roseColor);
+      grad.addColorStop(1, accentColor);
+      ctx.fillStyle = grad;
+
+      const gap = 4;
+      const barW = (w - gap * (barCount - 1)) / barCount;
+      const mid = (barCount - 1) / 2;
+
+      for (let i = 0; i < barCount; i++) {
+        const distFromMid = Math.abs(i - mid) / mid;
+        let amp;
+        if (audioGraphReady && analyserNode && freqData) {
+          const bin = Math.min(freqData.length - 1, Math.floor((1 - distFromMid * 0.72) * 28));
+          amp = (freqData[bin] / 255) * (1 - distFromMid * 0.35);
+        } else {
+          amp = (0.28 + 0.48 * Math.abs(Math.sin(phase + i * 0.42))) * (1 - distFromMid * 0.4);
+        }
+        const barH = Math.max(4, amp * (h - 4));
+        const x = i * (barW + gap);
+        const y = (h - barH) / 2;
+        ctx.beginPath();
+        ctx.roundRect(x, y, barW, barH, barW / 2);
+        ctx.fill();
+      }
+    };
+    visualizerRaf = requestAnimationFrame(draw);
+  }
+
+  function stopVisualizerLoop() {
+    if (visualizerRaf) { cancelAnimationFrame(visualizerRaf); visualizerRaf = null; }
+    document.documentElement.style.setProperty('--beat-pulse', '0');
+    const ctx = visualizerCanvas?.getContext('2d');
+    if (ctx) {
+      const w = visualizerCanvas.width;
+      const h = visualizerCanvas.height;
+      ctx.clearRect(0, 0, w, h);
+      const style = getComputedStyle(document.documentElement);
+      ctx.fillStyle = style.getPropertyValue('--track-rail').trim() || 'rgba(255,255,255,0.2)';
+      const barCount = 34;
+      const gap = 4;
+      const barW = (w - gap * (barCount - 1)) / barCount;
+      for (let i = 0; i < barCount; i++) {
+        ctx.beginPath();
+        ctx.roundRect(i * (barW + gap), (h - 4) / 2, barW, 4, 2);
+        ctx.fill();
+      }
+    }
   }
 
   function setSeekVisual(percentage) {
     const clamped = clamp(percentage, 0, 100);
     seekBar.value = String(clamped);
+    if (sheetSeekBar) sheetSeekBar.value = String(clamped);
     if (seekControl) seekControl.style.setProperty('--progress', `${clamped}%`);
+    if (sheetSeekControl) sheetSeekControl.style.setProperty('--progress', `${clamped}%`);
+    if (miniProgressFill) miniProgressFill.style.width = `${clamped}%`;
+  }
+
+  function updateTimeDisplays(elapsed, duration) {
+    const cur = timeString(elapsed);
+    const tot = timeString(duration);
+    $('#currentTime').textContent = cur;
+    $('#totalTime').textContent = tot;
+    if ($('#sheetCurrentTime')) $('#sheetCurrentTime').textContent = cur;
+    if ($('#sheetTotalTime')) $('#sheetTotalTime').textContent = tot;
+  }
+
+  function updateMediaPositionState() {
+    if (!('mediaSession' in navigator) || typeof navigator.mediaSession.setPositionState !== 'function') return;
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+    try {
+      navigator.mediaSession.setPositionState({
+        duration: audio.duration,
+        playbackRate: audio.playbackRate || 1,
+        position: clamp(audio.currentTime || 0, 0, audio.duration)
+      });
+    } catch (_e) { /* Optional on older browsers. */ }
   }
 
   function setReady(value) {
     ready = value;
     seekBar.disabled = !value;
+    if (sheetSeekBar) sheetSeekBar.disabled = !value;
     if (seekControl) seekControl.classList.toggle('is-disabled', !value);
+    if (sheetSeekControl) sheetSeekControl.classList.toggle('is-disabled', !value);
     if (value) {
       audioFailed = false;
       const isLocal = localAudioOverrides.has(currentTrack().id);
@@ -524,28 +764,67 @@
       fileInput.click();
       return;
     }
+    clearTimeout(pauseFadeTimer);
+    ensureAudioGraph();
+    if (audioCtx && audioCtx.state === 'suspended') {
+      try { await audioCtx.resume(); } catch (_e) { /* Ignore. */ }
+    }
+    if (audioGraphReady && gainNode && audioCtx) {
+      const now = audioCtx.currentTime;
+      gainNode.gain.cancelScheduledValues(now);
+      gainNode.gain.setValueAtTime(Math.max(0.001, gainNode.gain.value * 0.25), now);
+      gainNode.gain.linearRampToValueAtTime(targetVolume, now + 0.22);
+    } else {
+      audio.volume = targetVolume;
+    }
     try { await audio.play(); }
     catch (error) {
-      if (error?.name === 'AbortError') return; // User switched song before play completed.
-      if (audio.error) return; // Handled by the error event, with a useful filename.
+      if (error?.name === 'AbortError') return;
+      if (audio.error) return;
       showToast('Audio tidak dapat diputar. Pastikan sumber MP3 dapat diakses.');
+    }
+  }
+
+  function smoothPause(durationMs = 180) {
+    if (audio.paused) return;
+    clearTimeout(pauseFadeTimer);
+    if (audioGraphReady && gainNode && audioCtx) {
+      const now = audioCtx.currentTime;
+      gainNode.gain.cancelScheduledValues(now);
+      gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+      gainNode.gain.linearRampToValueAtTime(0.001, now + durationMs / 1000);
+      pauseFadeTimer = setTimeout(() => {
+        audio.pause();
+        if (gainNode && audioCtx) gainNode.gain.setValueAtTime(targetVolume, audioCtx.currentTime);
+      }, durationMs);
+    } else {
+      audio.pause();
     }
   }
 
   function togglePlay() {
     if (audio.paused) tryPlay();
-    else audio.pause();
+    else smoothPause(170);
   }
 
   function progress() {
     const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
-    $('#totalTime').textContent = timeString(duration);
-    if (isSeeking) return;
+    if (isSeeking) {
+      $('#totalTime').textContent = timeString(duration);
+      if ($('#sheetTotalTime')) $('#sheetTotalTime').textContent = timeString(duration);
+      return;
+    }
     const elapsed = audio.currentTime || 0;
-    $('#currentTime').textContent = timeString(elapsed);
+    updateTimeDisplays(elapsed, duration);
     const percentage = duration ? clamp(elapsed / duration * 100, 0, 100) : 0;
     setSeekVisual(percentage);
     syncActiveLyric(elapsed);
+    const sec = Math.floor(elapsed);
+    if (ready && sec !== lastSavedSecond && sec % 5 === 0) {
+      lastSavedSecond = sec;
+      savePrefs();
+      updateMediaPositionState();
+    }
   }
 
   function changeTime(seconds) {
@@ -589,12 +868,7 @@
     return lines.sort((a, b) => a.time - b.time);
   }
 
-  function renderLyrics(sections) {
-    lyricLines = [];
-    lastActiveLine = -1;
-    followButton.hidden = true;
-    followLyrics = true;
-    updateFollowButton();
+  function buildLyricsFragment(sections, targetList) {
     const fragment = document.createDocumentFragment();
     for (const section of sections) {
       const wrapper = document.createElement('section');
@@ -607,25 +881,51 @@
         const line = document.createElement('span');
         line.className = 'lyric-line';
         line.textContent = text;
-        lyricLines.push({ element: line, text, time: null });
+        targetList.push({ element: line, text, time: null });
         wrapper.append(line);
       }
       fragment.append(wrapper);
     }
-    lyricsContent.replaceChildren(fragment);
+    return fragment;
+  }
+
+  function renderLyrics(sections) {
+    lyricLines = [];
+    sheetLyricLines = [];
+    currentSections = sections;
+    currentRawLyrics = sections.map((s) => `[${s.title}]\n${s.lines.join('\n')}`).join('\n\n');
+    lastActiveLine = -1;
+    followButton.hidden = true;
+    followLyrics = true;
+    updateFollowButton();
+    lyricsContent.replaceChildren(buildLyricsFragment(sections, lyricLines));
     lyricsScroll.scrollTop = 0;
+    if (sheetLyricsContent) {
+      sheetLyricsContent.replaceChildren(buildLyricsFragment(sections, sheetLyricLines));
+      if (sheetLyricsScroll) sheetLyricsScroll.scrollTop = 0;
+    }
     lyricsTip.textContent = '↕ Scroll untuk membaca lirik';
   }
 
   function setLyricsMessage(message) {
     lyricLines = [];
+    sheetLyricLines = [];
+    currentSections = [];
+    currentRawLyrics = '';
     lastActiveLine = -1;
     followButton.hidden = true;
-    const p = document.createElement('p');
-    p.className = 'lyrics-message';
-    p.textContent = message;
-    lyricsContent.replaceChildren(p);
+    const makeMsg = () => {
+      const p = document.createElement('p');
+      p.className = 'lyrics-message';
+      p.textContent = message;
+      return p;
+    };
+    lyricsContent.replaceChildren(makeMsg());
     lyricsScroll.scrollTop = 0;
+    if (sheetLyricsContent) {
+      sheetLyricsContent.replaceChildren(makeMsg());
+      if (sheetLyricsScroll) sheetLyricsScroll.scrollTop = 0;
+    }
   }
 
   function normalizeText(text) {
@@ -681,10 +981,13 @@
       const text = normalizeText(entry.text);
       for (let i = position; i < lyricLines.length; i++) {
         if (normalizeText(lyricLines[i].text) !== text) continue;
-        lyricLines[i].time = entry.time;
-        lyricLines[i].element.dataset.timed = 'true';
-        lyricLines[i].element.dataset.time = String(entry.time);
-        lyricLines[i].element.title = `Putar mulai ${timeString(entry.time)}`;
+        for (const item of [lyricLines[i], sheetLyricLines[i]]) {
+          if (!item) continue;
+          item.time = entry.time;
+          item.element.dataset.timed = 'true';
+          item.element.dataset.time = String(entry.time);
+          item.element.title = `Putar mulai ${timeString(entry.time)}`;
+        }
         position = i + 1;
         count++;
         break;
@@ -699,14 +1002,15 @@
 
   function updateFollowButton() {
     followButton.setAttribute('aria-pressed', String(followLyrics));
-    followButton.querySelector('span').textContent = followLyrics ? 'Ikuti lagu' : 'Ikuti lagi';
+    followButton.querySelector('span').textContent = followLyrics ? 'Ikuti' : 'Ikuti lagi';
   }
 
-  function centerLyric(element) {
-    const panel = lyricsScroll.getBoundingClientRect();
+  function centerLyric(element, container = lyricsScroll) {
+    if (!element || !container) return;
+    const panel = container.getBoundingClientRect();
     const line = element.getBoundingClientRect();
     const offset = line.top - panel.top - (panel.height - line.height) / 2;
-    lyricsScroll.scrollTo({ top: lyricsScroll.scrollTop + offset, behavior: 'smooth' });
+    container.scrollTo({ top: container.scrollTop + offset, behavior: 'smooth' });
   }
 
   function syncActiveLyric(seconds) {
@@ -717,11 +1021,19 @@
       if (time !== null && time > seconds + .07) break;
     }
     if (matchedIndex === lastActiveLine) return;
-    if (lastActiveLine >= 0) lyricLines[lastActiveLine]?.element.classList.remove('active');
+    if (lastActiveLine >= 0) {
+      lyricLines[lastActiveLine]?.element.classList.remove('active');
+      sheetLyricLines[lastActiveLine]?.element.classList.remove('active');
+    }
     if (matchedIndex >= 0) {
       const element = lyricLines[matchedIndex].element;
       element.classList.add('active');
-      if (followLyrics && !audio.paused) centerLyric(element);
+      if (followLyrics && !audio.paused) centerLyric(element, lyricsScroll);
+      const sheetEl = sheetLyricLines[matchedIndex]?.element;
+      if (sheetEl) {
+        sheetEl.classList.add('active');
+        if (isSheetOpen && activeSheetTab === 'lyrics' && !audio.paused) centerLyric(sheetEl, sheetLyricsScroll);
+      }
     }
     lastActiveLine = matchedIndex;
   }
@@ -747,31 +1059,526 @@
     setReady(false);
     isSeeking = false;
     seekPointerId = null;
+    activeSeekControl = null;
     if (seekControl) seekControl.classList.remove('is-seeking');
-    $('#currentTime').textContent = '0:00';
-    $('#totalTime').textContent = '0:00';
+    if (sheetSeekControl) sheetSeekControl.classList.remove('is-seeking');
+    updateTimeDisplays(0, 0);
     setSeekVisual(0);
     audioHint.textContent = `Memuat sumber musik “${track.title}”…`;
     loadLyricsForTrack(track, requestId);
     if (updateUrl) updatePageLink(track);
     audio.src = localAudioOverrides.get(track.id) || resolvePath(track.audio);
     audio.load();
+    savePrefs();
     if (autoplay) tryPlay();
   }
 
-  function nextTrack() { switchTrack((activeIndex + 1) % tracks.length, { autoplay: true }); }
+  function computeNextIndex() {
+    if (tracks.length <= 1) return 0;
+    if (shuffleMode) {
+      const candidates = tracks.map((_, i) => i).filter((i) => i !== activeIndex);
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    }
+    return (activeIndex + 1) % tracks.length;
+  }
+
+  function refreshUpcomingTrack() {
+    if (!tracks.length) return;
+    upcomingIndex = computeNextIndex();
+    const next = tracks[upcomingIndex];
+    const upNextBtn = $('#upNextButton');
+    if (!upNextBtn || !next) return;
+    if (tracks.length <= 1) { upNextBtn.hidden = true; return; }
+    upNextBtn.hidden = false;
+    $('#upNextCover').src = resolvePath(next.cover || 'assets/cover-lagu-kedua.png');
+    $('#upNextTitle').textContent = next.title;
+  }
+
+  function nextTrack() {
+    const target = upcomingIndex !== activeIndex ? upcomingIndex : computeNextIndex();
+    switchTrack(target, { autoplay: true });
+  }
   function previousTrack() {
     if (ready && audio.currentTime > 3) { audio.currentTime = 0; progress(); return; }
     switchTrack((activeIndex - 1 + tracks.length) % tracks.length, { autoplay: true });
   }
 
   function updateRepeatUi() {
-    repeatButton.dataset.mode = repeatMode;
     const labels = { off: 'Pengulangan mati', all: 'Ulang seluruh playlist', one: 'Ulang lagu ini' };
-    repeatButton.title = `Mode: ${labels[repeatMode]}`;
-    repeatButton.setAttribute('aria-label', `Mode: ${labels[repeatMode]}. Klik untuk mengubah.`);
-    repeatButton.setAttribute('aria-pressed', String(repeatMode !== 'off'));
-    repeatButton.querySelector('.repeat-index').textContent = repeatMode === 'one' ? '1' : '';
+    for (const btn of [repeatButton, $('#sheetRepeatButton')]) {
+      if (!btn) continue;
+      btn.dataset.mode = repeatMode;
+      btn.title = `Mode: ${labels[repeatMode]}`;
+      btn.setAttribute('aria-label', `Mode: ${labels[repeatMode]}. Klik untuk mengubah.`);
+      btn.setAttribute('aria-pressed', String(repeatMode !== 'off'));
+      const idx = btn.querySelector('.repeat-index');
+      if (idx) idx.textContent = repeatMode === 'one' ? '1' : '';
+    }
+  }
+
+  function updateShuffleUi() {
+    for (const btn of [shuffleButton, $('#sheetShuffleButton')]) {
+      if (!btn) continue;
+      btn.setAttribute('aria-pressed', String(shuffleMode));
+      btn.title = shuffleMode ? 'Mode acak: aktif' : 'Mode acak: mati';
+    }
+    refreshUpcomingTrack();
+  }
+
+  function updateFavoriteUi(animate = false) {
+    const track = currentTrack();
+    if (!track) return;
+    const isFav = favorites.has(track.id);
+    const heroBtn = $('#heroFavoriteButton');
+    const heroLabel = $('#heroFavoriteLabel');
+    if (heroLabel) heroLabel.textContent = isFav ? 'Disukai' : 'Sukai';
+    for (const btn of [heroBtn, $('#dockFavoriteButton'), $('#sheetFavoriteButton')]) {
+      if (!btn) continue;
+      btn.setAttribute('aria-pressed', String(isFav));
+      btn.title = isFav ? 'Hapus dari favorit' : 'Simpan ke favorit';
+      if (animate) {
+        btn.classList.remove('fav-pop');
+        void btn.offsetWidth;
+        btn.classList.add('fav-pop');
+      }
+    }
+  }
+
+  function toggleFavorite() {
+    const track = currentTrack();
+    if (!track) return;
+    if (favorites.has(track.id)) {
+      favorites.delete(track.id);
+      showToast(`“${track.title}” dihapus dari favorit.`);
+    } else {
+      favorites.add(track.id);
+      showToast(`“${track.title}” disimpan ke favorit ♥`);
+    }
+    updateFavoriteUi(true);
+    renderPlaylist();
+    savePrefs();
+  }
+
+  async function copyTextSafe(text) {
+    if (navigator.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(text); return true; }
+      catch (_e) { /* Fall through to textarea fallback. */ }
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (_e) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+
+  async function copyFullLyrics() {
+    const track = currentTrack();
+    if (!track || !currentRawLyrics) {
+      showToast('Lirik belum tersedia untuk disalin.');
+      return;
+    }
+    const artist = track.artist || 'Zandevaa';
+    const fullText = `${track.title} — ${artist}\n\n${currentRawLyrics}`;
+    const ok = await copyTextSafe(fullText);
+    showToast(ok ? `Lirik lengkap “${track.title}” berhasil disalin ♡` : 'Gagal menyalin lirik ke clipboard.');
+  }
+
+  async function shareCurrentTrack() {
+    const track = currentTrack();
+    const url = getTrackShareUrl(track);
+    const shareTitle = `${track.title} — ${track.artist || 'Zandevaa'}`;
+    const payload = { title: shareTitle, text: `${shareTitle} — Ada lagu dan cerita kecil untukmu. ♡`, url };
+    try {
+      if (navigator.share) { await navigator.share(payload); return; }
+      if (await copyTextSafe(url)) { showToast('Tautan lagu ini berhasil disalin ♡'); return; }
+      throw new Error('Clipboard tidak tersedia');
+    } catch (e) { if (e.name !== 'AbortError') showToast('Salin URL browser untuk membagikan lagu ini.'); }
+  }
+
+  // ─── Full-Screen Now Playing Sheet & Mini Dock ───
+  function setSheetTab(tab) {
+    activeSheetTab = tab === 'lyrics' ? 'lyrics' : 'player';
+    const isLyrics = activeSheetTab === 'lyrics';
+    $('#npPlayerPanel').hidden = isLyrics;
+    $('#npLyricsPanel').hidden = !isLyrics;
+    $('#tabPlayerBtn').classList.toggle('active', !isLyrics);
+    $('#tabPlayerBtn').setAttribute('aria-selected', String(!isLyrics));
+    $('#tabLyricsBtn').classList.toggle('active', isLyrics);
+    $('#tabLyricsBtn').setAttribute('aria-selected', String(isLyrics));
+    if (isLyrics && lastActiveLine >= 0) {
+      requestAnimationFrame(() => centerLyric(sheetLyricLines[lastActiveLine]?.element, sheetLyricsScroll));
+    }
+  }
+
+  function openNowPlayingSheet(tab = 'player') {
+    if (!nowPlayingSheet) return;
+    setSheetTab(tab);
+    isSheetOpen = true;
+    nowPlayingSheet.hidden = false;
+    nowPlayingSheet.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('sheet-open');
+    requestAnimationFrame(() => nowPlayingSheet.classList.add('is-open'));
+    if (audio.paused) stopVisualizerLoop();
+  }
+
+  function closeNowPlayingSheet() {
+    if (!nowPlayingSheet || !isSheetOpen) return;
+    isSheetOpen = false;
+    nowPlayingSheet.classList.remove('is-open');
+    nowPlayingSheet.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('sheet-open');
+    setTimeout(() => { if (!isSheetOpen) nowPlayingSheet.hidden = true; }, 320);
+  }
+
+  function toggleMiniDock() {
+    isMiniDock = !isMiniDock;
+    musicDock.classList.toggle('is-mini', isMiniDock);
+    document.body.classList.toggle('dock-is-mini', isMiniDock);
+    $('#miniToggleButton')?.setAttribute('aria-pressed', String(isMiniDock));
+  }
+
+  // ─── Sleep Timer ───
+  function updateSleepUi() {
+    const active = sleepMode !== 'off';
+    let badgeText = '';
+    let statusText = 'Otomatis hentikan musik dengan fade-out lembut.';
+    if (sleepMode === 'end-of-track') {
+      badgeText = '1♪';
+      statusText = 'Musik akan berhenti otomatis setelah lagu ini selesai.';
+    } else if (sleepMode === 'minutes') {
+      const remainingSec = Math.max(0, Math.ceil((sleepEndTimestamp - Date.now()) / 1000));
+      const mins = Math.ceil(remainingSec / 60);
+      badgeText = `${mins}m`;
+      statusText = `Musik akan berhenti dalam ${timeString(remainingSec)}.`;
+    }
+    for (const btn of [$('#sleepTimerButton'), $('#sheetSleepButton')]) {
+      if (btn) btn.setAttribute('aria-pressed', String(active));
+    }
+    for (const badge of [$('#dockSleepBadge'), $('#sheetSleepBadge')]) {
+      if (!badge) continue;
+      badge.textContent = badgeText;
+      badge.hidden = !active;
+    }
+    if ($('#sleepStatusText')) $('#sleepStatusText').textContent = statusText;
+    sleepTimerModal?.querySelectorAll('.sleep-option').forEach((btn) => {
+      const val = btn.dataset.sleep;
+      const isSelected = (sleepMode === 'off' && val === 'off')
+        || (sleepMode === 'end-of-track' && val === 'end-of-track')
+        || (sleepMode === 'minutes' && btn.dataset.activeMinutes === 'true');
+      btn.classList.toggle('active', isSelected);
+    });
+  }
+
+  function setSleepTimer(value) {
+    clearInterval(sleepTickInterval);
+    sleepTickInterval = null;
+    sleepTimerModal?.querySelectorAll('.sleep-option').forEach((b) => { delete b.dataset.activeMinutes; });
+
+    if (value === 'off') {
+      sleepMode = 'off';
+      sleepEndTimestamp = 0;
+      showToast('Sleep Timer dimatikan.');
+    } else if (value === 'end-of-track') {
+      sleepMode = 'end-of-track';
+      sleepEndTimestamp = 0;
+      showToast('Sleep Timer: berhenti setelah lagu ini selesai 🌙');
+    } else {
+      const mins = Number(value);
+      sleepMode = 'minutes';
+      sleepEndTimestamp = Date.now() + mins * 60 * 1000;
+      const btn = sleepTimerModal?.querySelector(`.sleep-option[data-sleep="${mins}"]`);
+      if (btn) btn.dataset.activeMinutes = 'true';
+      showToast(`Sleep Timer diatur ${mins} menit 🌙`);
+      sleepTickInterval = setInterval(() => {
+        if (Date.now() >= sleepEndTimestamp) {
+          clearInterval(sleepTickInterval);
+          sleepTickInterval = null;
+          sleepMode = 'off';
+          sleepEndTimestamp = 0;
+          smoothPause(2400);
+          updateSleepUi();
+          showToast('Sleep Timer selesai · Selamat beristirahat 🌙');
+          return;
+        }
+        updateSleepUi();
+      }, 1000);
+    }
+    updateSleepUi();
+  }
+
+  // ─── Share Lyric Card Studio (WA Status / IG Story) ───
+  function getSelectableLines() {
+    return currentSections.flatMap((sec) => sec.lines.map((line) => ({ section: sec.title, text: line })));
+  }
+
+  function loadCoverForCard(url) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
+  }
+
+  function wrapCanvasText(ctx, text, maxWidth) {
+    const words = text.split(/\s+/);
+    const lines = [];
+    let current = '';
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if (ctx.measureText(test).width > maxWidth && current) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = test;
+      }
+    }
+    if (current) lines.push(current);
+    return lines;
+  }
+
+  function renderLyricCard() {
+    if (!lyricCardCanvas) return;
+    const track = currentTrack();
+    if (!track) return;
+    const isStory = lyricCardRatio === 'story';
+    const W = 1080;
+    const H = isStory ? 1920 : 1350;
+    lyricCardCanvas.width = W;
+    lyricCardCanvas.height = H;
+    const ctx = lyricCardCanvas.getContext('2d');
+    if (!ctx) return;
+
+    const style = getComputedStyle(document.documentElement);
+    const isLight = document.documentElement.dataset.themeMode === 'light';
+    const bgTop = style.getPropertyValue('--bg-top').trim() || '#112848';
+    const bgBottom = style.getPropertyValue('--bg-bottom').trim() || '#07101f';
+    const pageCol = style.getPropertyValue('--page').trim() || '#0a1628';
+    const accent = style.getPropertyValue('--accent').trim() || '#f1cfa8';
+    const rose = style.getPropertyValue('--rose').trim() || '#f2968e';
+    const ink = style.getPropertyValue('--ink').trim() || '#f2f5fa';
+    const dim = style.getPropertyValue('--dim').trim() || '#a8b7cc';
+
+    // Base ambient gradient
+    const bgGrad = ctx.createLinearGradient(0, 0, W, H);
+    bgGrad.addColorStop(0, bgTop);
+    bgGrad.addColorStop(0.55, pageCol);
+    bgGrad.addColorStop(1, bgBottom);
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, H);
+
+    // Soft blurred cover art wash
+    if (cardCoverImage) {
+      ctx.save();
+      ctx.globalAlpha = isLight ? 0.28 : 0.34;
+      ctx.filter = 'blur(68px) saturate(1.5)';
+      const scale = Math.max(W / cardCoverImage.width, H / cardCoverImage.height) * 1.15;
+      const dw = cardCoverImage.width * scale;
+      const dh = cardCoverImage.height * scale;
+      ctx.drawImage(cardCoverImage, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      ctx.restore();
+    }
+
+    // Subtle overlay for contrast
+    ctx.fillStyle = isLight ? 'rgba(248, 250, 255, 0.38)' : 'rgba(6, 12, 24, 0.42)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Glass Lyric Card container
+    const padX = 88;
+    const cardW = W - padX * 2;
+    const cardH = isStory ? 1160 : 940;
+    const cardX = padX;
+    const cardY = (H - cardH) / 2 - (isStory ? 20 : 10);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(cardX, cardY, cardW, cardH, 52);
+    ctx.fillStyle = isLight ? 'rgba(255, 255, 255, 0.78)' : 'rgba(12, 22, 42, 0.68)';
+    ctx.shadowColor = isLight ? 'rgba(18, 34, 66, 0.16)' : 'rgba(0, 0, 0, 0.45)';
+    ctx.shadowBlur = 70;
+    ctx.shadowOffsetY = 26;
+    ctx.fill();
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.roundRect(cardX, cardY, cardW, cardH, 52);
+    ctx.strokeStyle = isLight ? 'rgba(20, 42, 84, 0.14)' : 'rgba(255, 255, 255, 0.16)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Header inside card: cover art + song title & artist
+    const innerPad = 72;
+    const artSize = 152;
+    const artX = cardX + innerPad;
+    const artY = cardY + innerPad;
+
+    if (cardCoverImage) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(artX, artY, artSize, artSize, 26);
+      ctx.clip();
+      ctx.drawImage(cardCoverImage, artX, artY, artSize, artSize);
+      ctx.restore();
+    }
+
+    ctx.fillStyle = ink;
+    ctx.font = '700 44px "Playfair Display", Georgia, serif';
+    const titleMaxW = cardW - innerPad * 2 - artSize - 36;
+    const titleLines = wrapCanvasText(ctx, track.title, titleMaxW).slice(0, 2);
+    titleLines.forEach((line, i) => {
+      ctx.fillText(line, artX + artSize + 36, artY + 62 + i * 52);
+    });
+
+    ctx.fillStyle = dim;
+    ctx.font = '600 28px "Manrope", system-ui, sans-serif';
+    ctx.fillText(track.artist || 'Zandevaa', artX + artSize + 36, artY + 62 + titleLines.length * 52 + 8);
+
+    // Decorative quote accent line
+    const quoteTop = artY + artSize + 68;
+    ctx.fillStyle = rose;
+    ctx.font = 'italic 84px "Playfair Display", Georgia, serif';
+    ctx.fillText('“', cardX + innerPad - 8, quoteTop + 42);
+
+    // Selected lyrics text
+    const allLines = getSelectableLines();
+    const chosen = selectedCardLineIndices.length
+      ? selectedCardLineIndices.map((idx) => allLines[idx]?.text).filter(Boolean)
+      : [track.dedication || 'Ada cerita di balik setiap nada.'];
+
+    const fontSize = chosen.length >= 4 ? 46 : chosen.length === 3 ? 52 : 58;
+    const lineHeight = Math.round(fontSize * 1.42);
+    ctx.font = `italic 500 ${fontSize}px "Playfair Display", Georgia, serif`;
+    ctx.fillStyle = ink;
+
+    const wrappedBlocks = chosen.flatMap((l) => wrapCanvasText(ctx, l, cardW - innerPad * 2));
+    const maxLines = isStory ? 10 : 7;
+    const visibleLines = wrappedBlocks.slice(0, maxLines);
+    const availableH = (cardY + cardH - 135) - (quoteTop + 70);
+    const totalTextH = visibleLines.length * lineHeight;
+    let cursorY = quoteTop + 75 + Math.max(0, (availableH - totalTextH) / 2);
+
+    for (const line of visibleLines) {
+      ctx.fillText(line, cardX + innerPad, cursorY);
+      cursorY += lineHeight;
+    }
+
+    // Card footer signature
+    const footerY = cardY + cardH - 64;
+    ctx.fillStyle = accent;
+    ctx.font = '700 24px "Manrope", system-ui, sans-serif';
+    ctx.fillText('✧  zandevaa / Music Stories', cardX + innerPad, footerY);
+  }
+
+  async function openLyricCardModal() {
+    const track = currentTrack();
+    if (!track) return;
+    const allLines = getSelectableLines();
+    selectedCardLineIndices = [];
+    if (allLines.length) {
+      const chorusStart = allLines.findIndex((l) => /chorus|reff/i.test(l.section));
+      const start = chorusStart >= 0 ? chorusStart : 0;
+      for (let i = start; i < Math.min(allLines.length, start + 3); i++) selectedCardLineIndices.push(i);
+    }
+
+    const renderLineButtons = () => {
+      const frag = document.createDocumentFragment();
+      allLines.forEach((item, idx) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `card-line-btn${selectedCardLineIndices.includes(idx) ? ' selected' : ''}`;
+        btn.textContent = item.text;
+        btn.addEventListener('click', () => {
+          const pos = selectedCardLineIndices.indexOf(idx);
+          if (pos >= 0) {
+            selectedCardLineIndices.splice(pos, 1);
+          } else {
+            if (selectedCardLineIndices.length >= 4) {
+              showToast('Maksimal 4 baris lirik per kartu.');
+              return;
+            }
+            selectedCardLineIndices.push(idx);
+            selectedCardLineIndices.sort((a, b) => a - b);
+          }
+          btn.classList.toggle('selected', selectedCardLineIndices.includes(idx));
+          $('#selectedLinesCount').textContent = String(selectedCardLineIndices.length);
+          renderLyricCard();
+        });
+        frag.append(btn);
+      });
+      lyricCardLinesEl.replaceChildren(frag);
+      $('#selectedLinesCount').textContent = String(selectedCardLineIndices.length);
+    };
+
+    renderLineButtons();
+    lyricCardModal.hidden = false;
+    cardCoverImage = await loadCoverForCard(resolvePath(track.cover || 'assets/cover-lagu-kedua.png'));
+    renderLyricCard();
+  }
+
+  function downloadLyricCard() {
+    if (!lyricCardCanvas) return;
+    const track = currentTrack();
+    const link = document.createElement('a');
+    link.download = `${track?.id || 'music-story'}-lyric-card.png`;
+    link.href = lyricCardCanvas.toDataURL('image/png');
+    link.click();
+    showToast('Kartu lirik PNG berhasil diunduh ♡');
+  }
+
+  async function shareLyricCard() {
+    if (!lyricCardCanvas) return;
+    const track = currentTrack();
+    try {
+      const blob = await new Promise((resolve) => lyricCardCanvas.toBlob(resolve, 'image/png'));
+      if (blob && navigator.canShare) {
+        const file = new File([blob], `${track?.id || 'zandevaa'}-lyric-card.png`, { type: 'image/png' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: `${track.title} — ${track.artist || 'Zandevaa'}`,
+            text: `${track.title} — ${track.artist || 'Zandevaa'}`
+          });
+          return;
+        }
+      }
+      downloadLyricCard();
+    } catch (e) {
+      if (e.name !== 'AbortError') downloadLyricCard();
+    }
+  }
+
+  // ─── Horizontal Swipe Helper (Next / Previous Track) ───
+  function attachHorizontalSwipe(element, { onLeft, onRight, onUp, onDown, ignoreSelector } = {}) {
+    if (!element) return;
+    let startX = 0, startY = 0, tracking = false;
+    element.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) { tracking = false; return; }
+      if (ignoreSelector && e.target.closest(ignoreSelector)) { tracking = false; return; }
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      tracking = true;
+    }, { passive: true });
+    element.addEventListener('touchend', (e) => {
+      if (!tracking || !e.changedTouches.length) return;
+      tracking = false;
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+      if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy) * 1.35) {
+        if (dx < 0 && onLeft) onLeft();
+        else if (dx > 0 && onRight) onRight();
+      } else if (Math.abs(dy) > 56 && Math.abs(dy) > Math.abs(dx) * 1.45) {
+        if (dy < 0 && onUp) onUp();
+        else if (dy > 0 && onDown) onDown();
+      }
+    }, { passive: true });
   }
 
   playlistList.addEventListener('click', (event) => {
@@ -801,19 +1608,34 @@
     fileInput.value = '';
   });
 
-  audio.addEventListener('loadedmetadata', () => { setReady(true); progress(); });
+  audio.addEventListener('loadedmetadata', () => {
+    setReady(true);
+    if (pendingRestoreTime > 2 && Number.isFinite(audio.duration) && pendingRestoreTime < audio.duration - 5) {
+      audio.currentTime = pendingRestoreTime;
+      pendingRestoreTime = 0;
+    }
+    progress();
+    updateMediaPositionState();
+  });
   audio.addEventListener('durationchange', progress);
   audio.addEventListener('timeupdate', progress);
   audio.addEventListener('play', updatePlayState);
   audio.addEventListener('pause', updatePlayState);
   audio.addEventListener('ended', () => {
+    if (sleepMode === 'end-of-track') {
+      sleepMode = 'off';
+      updateSleepUi();
+      updatePlayState();
+      showToast('Sleep Timer selesai · Selamat beristirahat 🌙');
+      return;
+    }
     if (repeatMode === 'one') { audio.currentTime = 0; tryPlay(); return; }
+    if (shuffleMode && tracks.length > 1) { nextTrack(); return; }
     if (activeIndex < tracks.length - 1) { switchTrack(activeIndex + 1, { autoplay: true }); return; }
     if (repeatMode === 'all') { switchTrack(0, { autoplay: true }); return; }
     updatePlayState();
   });
   audio.addEventListener('error', () => {
-    // The MP3 is intentionally absent from this starter project until uploaded.
     audioFailed = true;
     ready = false;
     setReady(false);
@@ -825,63 +1647,72 @@
     updatePlayState();
   });
 
-  function scrubToClientX(clientX, { commit = false } = {}) {
-    if (!ready || !Number.isFinite(audio.duration) || audio.duration <= 0 || !seekControl) return;
-    const rect = seekControl.getBoundingClientRect();
+  function scrubToClientX(controlEl, clientX, { commit = false } = {}) {
+    if (!ready || !Number.isFinite(audio.duration) || audio.duration <= 0 || !controlEl) return;
+    const rect = controlEl.getBoundingClientRect();
     if (!rect.width) return;
     const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
     const targetTime = ratio * audio.duration;
     pendingSeekTime = targetTime;
     setSeekVisual(ratio * 100);
-    $('#currentTime').textContent = timeString(targetTime);
+    updateTimeDisplays(targetTime, audio.duration);
     syncActiveLyric(targetTime);
-    if (commit) audio.currentTime = targetTime;
+    if (commit) {
+      audio.currentTime = targetTime;
+      updateMediaPositionState();
+    }
   }
 
-  if (seekControl) {
-    seekControl.addEventListener('pointerdown', (event) => {
+  function bindSeekControl(controlEl, rangeEl) {
+    if (!controlEl) return;
+    controlEl.addEventListener('pointerdown', (event) => {
       if (!ready || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
       if (event.pointerType === 'mouse' && event.button !== 0) return;
       event.preventDefault();
       isSeeking = true;
       seekPointerId = event.pointerId;
-      seekControl.classList.add('is-seeking');
-      try { seekControl.setPointerCapture(event.pointerId); } catch (_e) { /* Optional. */ }
-      scrubToClientX(event.clientX, { commit: false });
+      activeSeekControl = controlEl;
+      controlEl.classList.add('is-seeking');
+      try { controlEl.setPointerCapture(event.pointerId); } catch (_e) { /* Optional. */ }
+      scrubToClientX(controlEl, event.clientX, { commit: false });
     });
-    seekControl.addEventListener('pointermove', (event) => {
-      if (!isSeeking || event.pointerId !== seekPointerId) return;
+    controlEl.addEventListener('pointermove', (event) => {
+      if (!isSeeking || event.pointerId !== seekPointerId || activeSeekControl !== controlEl) return;
       event.preventDefault();
-      scrubToClientX(event.clientX, { commit: false });
+      scrubToClientX(controlEl, event.clientX, { commit: false });
     });
     const finishSeek = (event) => {
-      if (!isSeeking || event.pointerId !== seekPointerId) return;
-      scrubToClientX(event.clientX, { commit: true });
+      if (!isSeeking || event.pointerId !== seekPointerId || activeSeekControl !== controlEl) return;
+      scrubToClientX(controlEl, event.clientX, { commit: true });
       isSeeking = false;
       seekPointerId = null;
-      seekControl.classList.remove('is-seeking');
-      try { seekControl.releasePointerCapture(event.pointerId); } catch (_e) { /* Optional. */ }
+      activeSeekControl = null;
+      controlEl.classList.remove('is-seeking');
+      try { controlEl.releasePointerCapture(event.pointerId); } catch (_e) { /* Optional. */ }
       progress();
     };
-    seekControl.addEventListener('pointerup', finishSeek);
-    seekControl.addEventListener('pointercancel', (event) => {
-      if (!isSeeking || event.pointerId !== seekPointerId) return;
+    controlEl.addEventListener('pointerup', finishSeek);
+    controlEl.addEventListener('pointercancel', (event) => {
+      if (!isSeeking || event.pointerId !== seekPointerId || activeSeekControl !== controlEl) return;
       if (Number.isFinite(pendingSeekTime)) audio.currentTime = pendingSeekTime;
       isSeeking = false;
       seekPointerId = null;
-      seekControl.classList.remove('is-seeking');
+      activeSeekControl = null;
+      controlEl.classList.remove('is-seeking');
       progress();
+    });
+    rangeEl?.addEventListener('input', () => {
+      if (isSeeking || !ready || !Number.isFinite(audio.duration)) return;
+      const pct = clamp(Number(rangeEl.value), 0, 100);
+      audio.currentTime = pct / 100 * audio.duration;
+      setSeekVisual(pct);
+      progress();
+      updateMediaPositionState();
     });
   }
 
-  // Keyboard & assistive technology fallback for the underlying range input.
-  seekBar.addEventListener('input', () => {
-    if (isSeeking || !ready || !Number.isFinite(audio.duration)) return;
-    const pct = clamp(Number(seekBar.value), 0, 100);
-    audio.currentTime = pct / 100 * audio.duration;
-    setSeekVisual(pct);
-    progress();
-  });
+  bindSeekControl(seekControl, seekBar);
+  bindSeekControl(sheetSeekControl, sheetSeekBar);
 
   // Prevent mobile pinch-zoom gestures while preserving normal scroll & seek scrubbing.
   ['gesturestart', 'gesturechange', 'gestureend'].forEach((type) => {
@@ -890,12 +1721,38 @@
   document.addEventListener('touchmove', (event) => {
     if (event.touches.length > 1) event.preventDefault();
   }, { passive: false });
-  volumeBar.addEventListener('input', () => { audio.volume = Number(volumeBar.value); });
-  repeatButton.addEventListener('click', () => {
+
+  volumeBar.addEventListener('input', () => setOutputVolume(Number(volumeBar.value)));
+
+  const cycleRepeat = () => {
     repeatMode = { off: 'all', all: 'one', one: 'off' }[repeatMode];
     updateRepeatUi();
+    savePrefs();
     showToast({ off: 'Pengulangan dimatikan', all: 'Ulangi seluruh playlist', one: 'Ulangi lagu ini' }[repeatMode]);
-  });
+  };
+  repeatButton.addEventListener('click', cycleRepeat);
+  $('#sheetRepeatButton')?.addEventListener('click', cycleRepeat);
+
+  const toggleShuffle = () => {
+    shuffleMode = !shuffleMode;
+    updateShuffleUi();
+    savePrefs();
+    showToast(shuffleMode ? 'Mode acak diaktifkan ⇄' : 'Mode acak dimatikan');
+  };
+  shuffleButton?.addEventListener('click', toggleShuffle);
+  $('#sheetShuffleButton')?.addEventListener('click', toggleShuffle);
+
+  // Favorites
+  $('#heroFavoriteButton')?.addEventListener('click', toggleFavorite);
+  $('#dockFavoriteButton')?.addEventListener('click', toggleFavorite);
+  $('#sheetFavoriteButton')?.addEventListener('click', toggleFavorite);
+
+  // Lyrics toolbar & copy full lyrics
+  $('#copyLyricsButton')?.addEventListener('click', copyFullLyrics);
+  $('#sheetCopyLyricsButton')?.addEventListener('click', copyFullLyrics);
+  $('#focusLyricsButton')?.addEventListener('click', () => openNowPlayingSheet('lyrics'));
+  $('#lyricCardButton')?.addEventListener('click', openLyricCardModal);
+  $('#sheetLyricCardButton')?.addEventListener('click', openLyricCardModal);
   $('#topLyrics').addEventListener('click', () => {
     followLyrics = false;
     updateFollowButton();
@@ -904,34 +1761,104 @@
   followButton.addEventListener('click', () => {
     followLyrics = !followLyrics;
     updateFollowButton();
-    if (followLyrics && lastActiveLine >= 0) centerLyric(lyricLines[lastActiveLine].element);
+    if (followLyrics && lastActiveLine >= 0) centerLyric(lyricLines[lastActiveLine].element, lyricsScroll);
   });
-  lyricsContent.addEventListener('click', (event) => {
+
+  const handleLyricLineClick = (event) => {
     const line = event.target.closest('.lyric-line[data-time]');
     if (!line || audioFailed) return;
     audio.currentTime = Number(line.dataset.time);
     followLyrics = true;
     updateFollowButton();
     progress();
-  });
+    updateMediaPositionState();
+  };
+  lyricsContent.addEventListener('click', handleLyricLineClick);
+  sheetLyricsContent?.addEventListener('click', handleLyricLineClick);
+
   ['wheel', 'touchstart', 'pointerdown', 'keydown'].forEach(type => {
     lyricsScroll.addEventListener(type, (event) => {
       if (type === 'keydown' && !['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) return;
       if (!followButton.hidden) { followLyrics = false; updateFollowButton(); }
     }, { passive: true });
   });
-  $('#shareButton').addEventListener('click', async () => {
-    const track = currentTrack();
-    const url = getTrackShareUrl(track);
-    const shareTitle = `${track.title} — ${track.artist || 'Zandevaa'}`;
-    const payload = { title: shareTitle, text: `${shareTitle} — Ada lagu dan cerita kecil untukmu. ♡`, url };
-    try {
-      if (navigator.share) { await navigator.share(payload); return; }
-      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(url); showToast('Tautan lagu ini berhasil disalin ♡'); return; }
-      throw new Error('Clipboard tidak tersedia');
-    } catch (e) { if (e.name !== 'AbortError') showToast('Salin URL browser untuk membagikan lagu ini.'); }
+
+  // Full-Screen Now Playing Sheet & Mini Dock controls
+  const openPlayerFromDock = () => openNowPlayingSheet('player');
+  $('#dockTrackInfo')?.addEventListener('click', openPlayerFromDock);
+  $('#dockTrackInfo')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPlayerFromDock(); }
   });
+  $('#expandPlayerButton')?.addEventListener('click', openPlayerFromDock);
+  $('#miniToggleButton')?.addEventListener('click', toggleMiniDock);
+  $('#closeSheetButton')?.addEventListener('click', closeNowPlayingSheet);
+  $('#npDragBar')?.addEventListener('click', closeNowPlayingSheet);
+  $('#tabPlayerBtn')?.addEventListener('click', () => setSheetTab('player'));
+  $('#tabLyricsBtn')?.addEventListener('click', () => setSheetTab('lyrics'));
+  $('#sheetPlayButton')?.addEventListener('click', togglePlay);
+  $('#sheetPrevButton')?.addEventListener('click', previousTrack);
+  $('#sheetNextButton')?.addEventListener('click', nextTrack);
+  $('#sheetLyricsPlayButton')?.addEventListener('click', togglePlay);
+  $('#sheetLyricsPrevButton')?.addEventListener('click', previousTrack);
+  $('#sheetLyricsNextButton')?.addEventListener('click', nextTrack);
+  $('#upNextButton')?.addEventListener('click', nextTrack);
+
+  // Share buttons
+  $('#shareButton').addEventListener('click', shareCurrentTrack);
+  $('#sheetShareButton')?.addEventListener('click', shareCurrentTrack);
+
+  // Sleep Timer modal
+  const openSleepModal = () => { updateSleepUi(); sleepTimerModal.hidden = false; };
+  const closeSleepModal = () => { sleepTimerModal.hidden = true; };
+  $('#sleepTimerButton')?.addEventListener('click', openSleepModal);
+  $('#sheetSleepButton')?.addEventListener('click', openSleepModal);
+  $('#closeSleepModal')?.addEventListener('click', closeSleepModal);
+  sleepTimerModal?.addEventListener('click', (e) => { if (e.target === sleepTimerModal) closeSleepModal(); });
+  $('#sleepOptions')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.sleep-option[data-sleep]');
+    if (!btn) return;
+    setSleepTimer(btn.dataset.sleep);
+    closeSleepModal();
+  });
+
+  // Share Lyric Card Studio modal
+  const closeLyricCard = () => { lyricCardModal.hidden = true; };
+  $('#closeLyricCardModal')?.addEventListener('click', closeLyricCard);
+  lyricCardModal?.addEventListener('click', (e) => { if (e.target === lyricCardModal) closeLyricCard(); });
+  lyricCardModal?.querySelectorAll('.ratio-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      lyricCardRatio = btn.dataset.ratio === 'post' ? 'post' : 'story';
+      lyricCardModal.querySelectorAll('.ratio-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      renderLyricCard();
+    });
+  });
+  $('#resetLyricSelection')?.addEventListener('click', () => {
+    selectedCardLineIndices = [];
+    lyricCardLinesEl.querySelectorAll('.card-line-btn').forEach((b) => b.classList.remove('selected'));
+    $('#selectedLinesCount').textContent = '0';
+    renderLyricCard();
+  });
+  $('#downloadLyricCardBtn')?.addEventListener('click', downloadLyricCard);
+  $('#shareLyricCardBtn')?.addEventListener('click', shareLyricCard);
+
+  // Mobile Swipe Gestures (Cover, Now Playing Art, Dock, Sheet Close)
+  attachHorizontalSwipe($('.cover-stage'), { onLeft: nextTrack, onRight: previousTrack });
+  attachHorizontalSwipe($('#sheetCoverStage'), { onLeft: nextTrack, onRight: previousTrack });
+  attachHorizontalSwipe(musicDock, {
+    onLeft: nextTrack,
+    onRight: previousTrack,
+    onUp: () => openNowPlayingSheet('player'),
+    ignoreSelector: '.seek-control, button, input'
+  });
+  attachHorizontalSwipe($('.np-topbar'), { onDown: closeNowPlayingSheet });
+  attachHorizontalSwipe($('#npDragBar'), { onDown: closeNowPlayingSheet });
+
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      if (!lyricCardModal.hidden) { closeLyricCard(); return; }
+      if (!sleepTimerModal.hidden) { closeSleepModal(); return; }
+      if (isSheetOpen) { closeNowPlayingSheet(); return; }
+    }
     const focus = document.activeElement;
     if (['INPUT', 'BUTTON', 'TEXTAREA', 'SELECT'].includes(focus?.tagName) || focus === lyricsScroll || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.code === 'Space') { event.preventDefault(); togglePlay(); }
@@ -940,30 +1867,42 @@
   });
   if ('mediaSession' in navigator) {
     const actions = {
-      play: () => tryPlay(), pause: () => audio.pause(),
+      play: () => tryPlay(), pause: () => smoothPause(150),
       previoustrack: previousTrack, nexttrack: nextTrack,
       seekbackward: (details) => changeTime(-(details.seekOffset || 10)),
       seekforward: (details) => changeTime(details.seekOffset || 10),
-      seekto: (details) => { if (ready && details.seekTime !== undefined) { audio.currentTime = details.seekTime; progress(); } }
+      seekto: (details) => { if (ready && details.seekTime !== undefined) { audio.currentTime = details.seekTime; progress(); updateMediaPositionState(); } }
     };
     Object.entries(actions).forEach(([name, handler]) => {
       try { navigator.mediaSession.setActionHandler(name, handler); } catch (_e) { /* Optional on browser. */ }
     });
   }
   window.addEventListener('beforeunload', () => {
+    savePrefs();
     for (const url of localAudioOverrides.values()) URL.revokeObjectURL(url);
   });
-  audio.volume = Number(volumeBar.value);
+  volumeBar.value = String(targetVolume);
+  audio.volume = targetVolume;
   if (tracks.length) {
     const rawSongParam = new URLSearchParams(location.search).get('song');
     const normalizedParam = rawSongParam ? rawSongParam.trim().toLowerCase() : '';
-    const index = normalizedParam
+    let index = normalizedParam
       ? tracks.findIndex(track =>
         track.id.toLowerCase() === normalizedParam ||
         track.title.toLowerCase() === normalizedParam
       )
       : -1;
+    // Restore last played song & timestamp if visiting root without explicit ?song= parameter.
+    if (index < 0 && !normalizedParam && prefs.lastTrackId) {
+      const savedIdx = tracks.findIndex((t) => t.id === prefs.lastTrackId);
+      if (savedIdx >= 0) {
+        index = savedIdx;
+        if (Number.isFinite(prefs.lastTime) && prefs.lastTime > 2) pendingRestoreTime = prefs.lastTime;
+      }
+    }
     updateRepeatUi();
+    updateShuffleUi();
+    updateSleepUi();
     switchTrack(index >= 0 ? index : 0, { updateUrl: IS_HTTP || index >= 0 });
   } else {
     setLyricsMessage('Belum ada lagu. Tambahkan daftar lagu di playlist.js.');
