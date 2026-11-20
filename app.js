@@ -55,8 +55,246 @@
   let lyricLines = [];
   let lastActiveLine = -1;
   let lyricRequest = 0;
+  let themeRequest = 0;
   let toastTimer = null;
   const localAudioOverrides = new Map();
+  const paletteCache = new Map();
+  const DEFAULT_PALETTE = { baseH: 215, baseS: 0.62, accentH: 34, accentS: 0.68, roseH: 6, roseS: 0.80 };
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h = 0, s = 0;
+    const l = (max + min) / 2;
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      switch (max) {
+        case r: h = ((g - b) / d + (g < b ? 6 : 0)) * 60; break;
+        case g: h = ((b - r) / d + 2) * 60; break;
+        default: h = ((r - g) / d + 4) * 60; break;
+      }
+    }
+    return [h, s, l];
+  }
+
+  function hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = l - c / 2;
+    let r = 0, g = 0, b = 0;
+    if (h < 60) [r, g, b] = [c, x, 0];
+    else if (h < 120) [r, g, b] = [x, c, 0];
+    else if (h < 180) [r, g, b] = [0, c, x];
+    else if (h < 240) [r, g, b] = [0, x, c];
+    else if (h < 300) [r, g, b] = [x, 0, c];
+    else [r, g, b] = [c, 0, x];
+    return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+  }
+
+  function rgbToHex(r, g, b) {
+    return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+  }
+
+  function hslCss(h, s, l, alpha) {
+    const [r, g, b] = hslToRgb(h, s, l);
+    return alpha === undefined ? rgbToHex(r, g, b) : `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function hueDistance(a, b) {
+    const diff = Math.abs(a - b) % 360;
+    return diff > 180 ? 360 - diff : diff;
+  }
+
+  function extractPaletteFromImage(image) {
+    const size = 48;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return DEFAULT_PALETTE;
+    ctx.drawImage(image, 0, 0, size, size);
+    const data = ctx.getImageData(0, 0, size, size).data;
+
+    const BINS = 24;
+    const bgBins = Array.from({ length: BINS }, () => ({ w: 0, sin: 0, cos: 0, s: 0 }));
+    const accBins = Array.from({ length: BINS }, () => ({ w: 0, sin: 0, cos: 0, s: 0 }));
+
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 180) continue;
+      const [h, s, l] = rgbToHsl(data[i], data[i + 1], data[i + 2]);
+      if (l < 0.04 || l > 0.94 || s < 0.12) continue;
+      const px = (i / 4) % size;
+      const py = Math.floor((i / 4) / size);
+      const dx = (px / (size - 1)) - 0.5;
+      const dy = (py / (size - 1)) - 0.5;
+      const centerBoost = 0.6 + 0.8 * Math.max(0, 1 - Math.hypot(dx, dy) * 1.45);
+      const idx = Math.floor(h / (360 / BINS)) % BINS;
+      const rad = h * Math.PI / 180;
+      const sin = Math.sin(rad);
+      const cos = Math.cos(rad);
+
+      if (l <= 0.72) {
+        const wBg = (0.3 + s) * (1 - Math.abs(l - 0.30) * 0.8) * centerBoost;
+        if (wBg > 0) {
+          bgBins[idx].w += wBg;
+          bgBins[idx].sin += sin * wBg;
+          bgBins[idx].cos += cos * wBg;
+          bgBins[idx].s += s * wBg;
+        }
+      }
+      if (l >= 0.20 && l <= 0.88 && s >= 0.18) {
+        const wAcc = (s * s) * (0.45 + l) * (1 - Math.abs(l - 0.62) * 0.7) * centerBoost;
+        if (wAcc > 0) {
+          accBins[idx].w += wAcc;
+          accBins[idx].sin += sin * wAcc;
+          accBins[idx].cos += cos * wAcc;
+          accBins[idx].s += s * wAcc;
+        }
+      }
+    }
+
+    const combineCluster = (bins, center) => {
+      let w = 0, sin = 0, cos = 0, s = 0;
+      for (const offset of [-1, 0, 1]) {
+        const b = bins[(center + offset + BINS) % BINS];
+        w += b.w; sin += b.sin; cos += b.cos; s += b.s;
+      }
+      if (w <= 0) return null;
+      const h = (Math.atan2(sin, cos) * 180 / Math.PI + 360) % 360;
+      return { h, s: s / w, w };
+    };
+
+    let bestBgIdx = -1, bestBgScore = 0;
+    for (let i = 0; i < BINS; i++) {
+      const score = bgBins[i].w + (bgBins[(i + 1) % BINS].w + bgBins[(i + BINS - 1) % BINS].w) * 0.45;
+      if (score > bestBgScore) { bestBgScore = score; bestBgIdx = i; }
+    }
+    const baseCluster = bestBgIdx >= 0 ? combineCluster(bgBins, bestBgIdx) : null;
+    if (!baseCluster || baseCluster.w < 6) {
+      return { baseH: 225, baseS: 0.14, accentH: 36, accentS: 0.56, roseH: 18, roseS: 0.58 };
+    }
+
+    const pickAccent = (minDistance) => {
+      let bestIdx = -1, bestScore = 0;
+      for (let i = 0; i < BINS; i++) {
+        const binHue = (i + 0.5) * (360 / BINS);
+        if (hueDistance(binHue, baseCluster.h) < minDistance) continue;
+        const score = accBins[i].w + (accBins[(i + 1) % BINS].w + accBins[(i + BINS - 1) % BINS].w) * 0.4;
+        if (score > bestScore) { bestScore = score; bestIdx = i; }
+      }
+      return bestIdx >= 0 ? combineCluster(accBins, bestIdx) : null;
+    };
+
+    const accentCluster = pickAccent(42) || pickAccent(24) || { h: (baseCluster.h + 38) % 360, s: 0.65, w: 0 };
+    return {
+      baseH: baseCluster.h,
+      baseS: baseCluster.s,
+      accentH: accentCluster.h,
+      accentS: accentCluster.s,
+      roseH: accentCluster.h,
+      roseS: clamp(accentCluster.s + 0.08, 0.52, 0.86)
+    };
+  }
+
+  function blendHue(h1, h2, ratio) {
+    let diff = ((h2 - h1 + 540) % 360) - 180;
+    return (h1 + diff * ratio + 360) % 360;
+  }
+
+  function applyThemePalette(palette) {
+    const baseH = palette.baseH;
+    const baseS = clamp(palette.baseS, 0.24, 0.64);
+    const accentH = palette.accentH;
+    const accentS = clamp(palette.accentS, 0.48, 0.80);
+    const roseH = palette.roseH ?? accentH;
+    const roseS = clamp(palette.roseS ?? accentS, 0.52, 0.84);
+    const surfaceH = hueDistance(baseH, roseH) <= 125 ? blendHue(baseH, roseH, 0.24) : baseH;
+
+    const pageHex = hslCss(surfaceH, baseS, 0.08);
+    const bgTop = hslCss(baseH, clamp(baseS + 0.04, 0.28, 0.66), 0.12);
+    const bgBottom = hslCss(surfaceH, baseS, 0.068);
+    const glowARgb = hslToRgb(baseH, clamp(baseS + 0.16, 0.52, 0.84), 0.44);
+    const glowBRgb = hslToRgb(roseH, clamp(roseS * 0.90, 0.48, 0.80), 0.45);
+    const accentRgb = hslToRgb(accentH, accentS, 0.82);
+    const roseRgb = hslToRgb(roseH, roseS, 0.75);
+    const tintRgb = hslToRgb(surfaceH, clamp(baseS * 0.62, 0.18, 0.44), 0.85);
+
+    const vars = {
+      '--page': pageHex,
+      '--bg-top': bgTop,
+      '--bg-bottom': bgBottom,
+      '--glow-a': rgbToHex(...glowARgb),
+      '--glow-a-rgb': glowARgb.join(', '),
+      '--glow-b': rgbToHex(...glowBRgb),
+      '--glow-b-rgb': glowBRgb.join(', '),
+      '--accent': rgbToHex(...accentRgb),
+      '--accent-rgb': accentRgb.join(', '),
+      '--accent-soft': hslCss(accentH, clamp(accentS * 0.76, 0.34, 0.64), 0.74),
+      '--accent-strong': hslCss(accentH, clamp(accentS + 0.06, 0.52, 0.88), 0.92),
+      '--accent-deep': hslCss(surfaceH, clamp(baseS + 0.06, 0.30, 0.68), 0.10),
+      '--rose': rgbToHex(...roseRgb),
+      '--rose-rgb': roseRgb.join(', '),
+      '--tint-rgb': tintRgb.join(', '),
+      '--tint-strong': hslCss(surfaceH, clamp(baseS * 0.85, 0.25, 0.66), 0.89),
+      '--tint-mid': hslCss(surfaceH, clamp(baseS * 0.45, 0.14, 0.30), 0.83),
+      '--dim': hslCss(surfaceH, clamp(baseS * 0.36, 0.12, 0.24), 0.71),
+      '--muted': hslCss(surfaceH, clamp(baseS * 0.34, 0.10, 0.22), 0.58),
+      '--card-top': hslCss(surfaceH, clamp(baseS + 0.02, 0.26, 0.62), 0.175, 0.82),
+      '--card-mid': hslCss(surfaceH, baseS, 0.11, 0.91),
+      '--card-bottom': hslCss(surfaceH, baseS, 0.095, 0.92),
+      '--panel-top': hslCss(surfaceH, clamp(baseS + 0.02, 0.26, 0.62), 0.17, 0.86),
+      '--panel-bottom': hslCss(surfaceH, baseS, 0.115, 0.74),
+      '--dock-bg': hslCss(surfaceH, baseS, 0.074, 0.93),
+      '--scroll-thumb': hslCss(surfaceH, clamp(baseS * 0.55, 0.16, 0.36), 0.35),
+      '--track-rail': hslCss(surfaceH, clamp(baseS * 0.46, 0.14, 0.30), 0.29)
+    };
+
+    const rootStyle = document.documentElement.style;
+    for (const [name, value] of Object.entries(vars)) rootStyle.setProperty(name, value);
+    setMetaContent('meta[name="theme-color"]', pageHex);
+  }
+
+  function applyTrackTheme(track, coverUrl) {
+    const reqId = ++themeRequest;
+    if (track?.theme && typeof track.theme.baseHue === 'number') {
+      applyThemePalette({
+        baseH: track.theme.baseHue,
+        baseS: track.theme.baseSat ?? 0.52,
+        accentH: track.theme.accentHue ?? (track.theme.baseHue + 38) % 360,
+        accentS: track.theme.accentSat ?? 0.68,
+        roseH: track.theme.roseHue ?? track.theme.accentHue ?? (track.theme.baseHue + 38) % 360,
+        roseS: track.theme.roseSat ?? 0.76
+      });
+      return;
+    }
+    if (paletteCache.has(coverUrl)) {
+      applyThemePalette(paletteCache.get(coverUrl));
+      return;
+    }
+    const probe = new Image();
+    probe.crossOrigin = 'anonymous';
+    probe.decoding = 'async';
+    probe.onload = () => {
+      if (reqId !== themeRequest) return;
+      try {
+        const palette = extractPaletteFromImage(probe);
+        paletteCache.set(coverUrl, palette);
+        applyThemePalette(palette);
+      } catch (_e) {
+        applyThemePalette(DEFAULT_PALETTE);
+      }
+    };
+    probe.onerror = () => {
+      if (reqId === themeRequest) applyThemePalette(DEFAULT_PALETTE);
+    };
+    probe.src = coverUrl;
+  }
 
   function showToast(message) {
     toast.textContent = message;
@@ -103,6 +341,7 @@
     $('#playerArtist').textContent = artist;
     $('#lyricsTrackTitle').textContent = track.title.toUpperCase();
     document.documentElement.style.setProperty('--cover-bg', `url("${coverUrl}")`);
+    applyTrackTheme(track, coverUrl);
     document.title = fullTitle;
     setMetaContent('meta[name="description"]', description);
     setMetaContent('meta[property="og:title"]', fullTitle);
