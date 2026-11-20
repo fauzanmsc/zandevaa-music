@@ -97,7 +97,7 @@ music-letters/
 │   ├── cover.webp         # Cover asli Untukmu Syifa
 │   ├── cover.jpg          # Preview tautan
 │   ├── cover-original.png
-│   ├── cover-lagu-kedua.svg    # Contoh; ganti cover aslinya
+│   ├── cover-lagu-kedua.png    # Contoh; ganti cover aslinya
 │   ├── favicon.svg
 │   ├── untukmu-syifa.mp3       # TAMBAHKAN SENDIRI
 │   └── lagu-kedua.mp3          # TAMBAHKAN SENDIRI

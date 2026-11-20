@@ -66,12 +66,12 @@
     setTitle(track.title);
     $('#heroDate').textContent = track.date || 'A PERSONAL MUSIC STORY';
     $('#heroDescription').textContent = track.description || 'Sebuah lagu dan cerita yang ditulis sepenuh hati.';
-    $('#heroCover').src = track.cover || 'assets/cover-lagu-kedua.svg';
+    $('#heroCover').src = track.cover || 'assets/cover-lagu-kedua.png';
     $('#heroCover').alt = `Cover lagu ${track.title}`;
     $('#heroArtist').textContent = `by ${track.artist || 'Zandevaa'}`;
     $('#heroDedication').textContent = `“${track.dedication || 'Ada cerita di balik setiap lagu.'}”`;
     $('#dedicationTitle').textContent = `— ${track.title}`;
-    $('#playerCover').src = track.cover || 'assets/cover-lagu-kedua.svg';
+    $('#playerCover').src = track.cover || 'assets/cover-lagu-kedua.png';
     $('#playerTitle').textContent = track.title;
     $('#playerArtist').textContent = track.artist || 'Zandevaa';
     $('#lyricsTrackTitle').textContent = track.title.toUpperCase();
@@ -83,7 +83,7 @@
         title: track.title,
         artist: track.artist || 'Zandevaa',
         album: 'Music Letters',
-        artwork: [{src: new URL(track.cover || 'assets/cover-lagu-kedua.svg', location.href).href}]
+        artwork: [{ src: new URL(track.cover || 'assets/cover-lagu-kedua.png', location.href).href }]
       });
     }
   }
@@ -103,7 +103,7 @@
       number.textContent = String(index + 1).padStart(2, '0');
       const image = document.createElement('img');
       image.className = 'playlist-thumb';
-      image.src = track.cover || 'assets/cover-lagu-kedua.svg';
+      image.src = track.cover || 'assets/cover-lagu-kedua.png';
       image.alt = '';
       image.loading = 'lazy';
       const details = document.createElement('span');
@@ -199,11 +199,11 @@
       if (!line) continue;
       const heading = line.match(/^\[([^\]\r\n]+)\]$/);
       if (heading && !/^\d{1,3}:\d{2}/.test(heading[1])) {
-        section = {title: heading[1], lines: []};
+        section = { title: heading[1], lines: [] };
         sections.push(section);
         continue;
       }
-      if (!section) { section = {title: 'Lyrics', lines: []}; sections.push(section); }
+      if (!section) { section = { title: 'Lyrics', lines: [] }; sections.push(section); }
       section.lines.push(line);
     }
     return sections.filter(s => s.lines.length);
@@ -218,7 +218,7 @@
       if (!matches.length || !words) continue;
       for (const m of matches) {
         const fraction = m[3] ? Number(`0.${m[3].padEnd(3, '0')}`) : 0;
-        lines.push({time: Number(m[1]) * 60 + Number(m[2]) + fraction, text: words});
+        lines.push({ time: Number(m[1]) * 60 + Number(m[2]) + fraction, text: words });
       }
     }
     return lines.sort((a, b) => a.time - b.time);
@@ -242,7 +242,7 @@
         const line = document.createElement('span');
         line.className = 'lyric-line';
         line.textContent = text;
-        lyricLines.push({element: line, text, time: null});
+        lyricLines.push({ element: line, text, time: null });
         wrapper.append(line);
       }
       fragment.append(wrapper);
@@ -276,14 +276,14 @@
       let text;
       if (typeof inline === 'string') text = inline;
       else {
-        const response = await fetch(track.lyricFile, {cache: 'no-cache'});
+        const response = await fetch(track.lyricFile, { cache: 'no-cache' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         text = await response.text();
       }
       if (requestId !== lyricRequest) return;
       const isLrc = /\.lrc(?:$|\?)/i.test(track.lyricFile);
       const entries = isLrc ? parseLrc(text) : [];
-      const sections = isLrc ? [{title: 'Song Lyrics', lines: entries.map(row => row.text)}] : parseTextLyrics(text);
+      const sections = isLrc ? [{ title: 'Song Lyrics', lines: entries.map(row => row.text) }] : parseTextLyrics(text);
       if (sections.length === 0) throw new Error('File lirik kosong');
       renderLyrics(sections);
       if (isLrc) applyLrc(entries);
@@ -293,7 +293,7 @@
           let lrc;
           if (typeof sample === 'string') lrc = sample;
           else {
-            const resp = await fetch(track.lrcFile, {cache: 'no-cache'});
+            const resp = await fetch(track.lrcFile, { cache: 'no-cache' });
             if (!resp.ok) return; // Timestamp .lrc is optional.
             lrc = await resp.text();
           }
@@ -341,7 +341,7 @@
     const panel = lyricsScroll.getBoundingClientRect();
     const line = element.getBoundingClientRect();
     const offset = line.top - panel.top - (panel.height - line.height) / 2;
-    lyricsScroll.scrollTo({top: lyricsScroll.scrollTop + offset, behavior: 'smooth'});
+    lyricsScroll.scrollTo({ top: lyricsScroll.scrollTop + offset, behavior: 'smooth' });
   }
 
   function syncActiveLyric(seconds) {
@@ -369,7 +369,7 @@
     } catch (_e) { /* E.g. sandboxed local HTML preview. */ }
   }
 
-  function switchTrack(index, {autoplay = false, updateUrl = true} = {}) {
+  function switchTrack(index, { autoplay = false, updateUrl = true } = {}) {
     if (!tracks.length || index < 0 || index >= tracks.length) return;
     activeIndex = index;
     const track = currentTrack();
@@ -394,15 +394,15 @@
     if (autoplay) tryPlay();
   }
 
-  function nextTrack() { switchTrack((activeIndex + 1) % tracks.length, {autoplay: true}); }
+  function nextTrack() { switchTrack((activeIndex + 1) % tracks.length, { autoplay: true }); }
   function previousTrack() {
     if (ready && audio.currentTime > 3) { audio.currentTime = 0; progress(); return; }
-    switchTrack((activeIndex - 1 + tracks.length) % tracks.length, {autoplay: true});
+    switchTrack((activeIndex - 1 + tracks.length) % tracks.length, { autoplay: true });
   }
 
   function updateRepeatUi() {
     repeatButton.dataset.mode = repeatMode;
-    const labels = {off: 'Pengulangan mati', all: 'Ulang seluruh playlist', one: 'Ulang lagu ini'};
+    const labels = { off: 'Pengulangan mati', all: 'Ulang seluruh playlist', one: 'Ulang lagu ini' };
     repeatButton.title = `Mode: ${labels[repeatMode]}`;
     repeatButton.setAttribute('aria-label', `Mode: ${labels[repeatMode]}. Klik untuk mengubah.`);
     repeatButton.setAttribute('aria-pressed', String(repeatMode !== 'off'));
@@ -414,7 +414,7 @@
     if (!button) return;
     const index = Number(button.dataset.trackIndex);
     if (index === activeIndex) { togglePlay(); return; }
-    switchTrack(index, {autoplay: true});
+    switchTrack(index, { autoplay: true });
   });
   playButton.addEventListener('click', togglePlay);
   previousButton.addEventListener('click', previousTrack);
@@ -431,7 +431,7 @@
     const oldUrl = localAudioOverrides.get(trackId);
     const url = URL.createObjectURL(file);
     localAudioOverrides.set(trackId, url);
-    switchTrack(activeIndex, {autoplay: true});
+    switchTrack(activeIndex, { autoplay: true });
     if (oldUrl) URL.revokeObjectURL(oldUrl);
     fileInput.value = '';
   });
@@ -443,8 +443,8 @@
   audio.addEventListener('pause', updatePlayState);
   audio.addEventListener('ended', () => {
     if (repeatMode === 'one') { audio.currentTime = 0; tryPlay(); return; }
-    if (activeIndex < tracks.length - 1) { switchTrack(activeIndex + 1, {autoplay: true}); return; }
-    if (repeatMode === 'all') { switchTrack(0, {autoplay: true}); return; }
+    if (activeIndex < tracks.length - 1) { switchTrack(activeIndex + 1, { autoplay: true }); return; }
+    if (repeatMode === 'all') { switchTrack(0, { autoplay: true }); return; }
     updatePlayState();
   });
   audio.addEventListener('error', () => {
@@ -467,14 +467,14 @@
   });
   volumeBar.addEventListener('input', () => { audio.volume = Number(volumeBar.value); });
   repeatButton.addEventListener('click', () => {
-    repeatMode = {off: 'all', all: 'one', one: 'off'}[repeatMode];
+    repeatMode = { off: 'all', all: 'one', one: 'off' }[repeatMode];
     updateRepeatUi();
-    showToast({off: 'Pengulangan dimatikan', all: 'Ulangi seluruh playlist', one: 'Ulangi lagu ini'}[repeatMode]);
+    showToast({ off: 'Pengulangan dimatikan', all: 'Ulangi seluruh playlist', one: 'Ulangi lagu ini' }[repeatMode]);
   });
   $('#topLyrics').addEventListener('click', () => {
     followLyrics = false;
     updateFollowButton();
-    lyricsScroll.scrollTo({top: 0, behavior: 'smooth'});
+    lyricsScroll.scrollTo({ top: 0, behavior: 'smooth' });
   });
   followButton.addEventListener('click', () => {
     followLyrics = !followLyrics;
@@ -493,11 +493,11 @@
     lyricsScroll.addEventListener(type, (event) => {
       if (type === 'keydown' && !['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) return;
       if (!followButton.hidden) { followLyrics = false; updateFollowButton(); }
-    }, {passive: true});
+    }, { passive: true });
   });
   $('#shareButton').addEventListener('click', async () => {
     const url = location.href.split('#')[0]; // Includes ?song=... to share the selected track.
-    const payload = {title: `${currentTrack().title} — ${currentTrack().artist}`, text: 'Ada lagu dan cerita kecil untukmu. ♡', url};
+    const payload = { title: `${currentTrack().title} — ${currentTrack().artist}`, text: 'Ada lagu dan cerita kecil untukmu. ♡', url };
     try {
       if (navigator.share) { await navigator.share(payload); return; }
       if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(url); showToast('Tautan lagu ini berhasil disalin ♡'); return; }
@@ -531,7 +531,7 @@
     const id = new URLSearchParams(location.search).get('song');
     const index = tracks.findIndex(track => track.id === id);
     updateRepeatUi();
-    switchTrack(index >= 0 ? index : 0, {updateUrl: index >= 0});
+    switchTrack(index >= 0 ? index : 0, { updateUrl: index >= 0 });
   } else {
     setLyricsMessage('Belum ada lagu. Tambahkan daftar lagu di playlist.js.');
     audioHint.textContent = 'Playlist masih kosong.';

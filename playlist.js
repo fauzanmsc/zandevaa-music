@@ -22,7 +22,7 @@ window.PLAYLIST_TRACKS = [
     title: 'S-Y-I-F-A (Always-on-My-Mind)', // Ganti dengan judul lagu ke-2 Anda.
     artist: 'Zandevaa',
     audio: 'assets/S-Y-I-F-A (Always-on-My-Mind).mp3', // Isi file MP3 lagu ke-2 di sini.
-    cover: 'assets/cover-lagu-kedua.svg', // Ganti ke cover asli: JPG/PNG/WEBP.
+    cover: 'assets/cover-lagu-kedua.png', // Ganti ke cover asli: JPG/PNG/WEBP.
     lyricFile: 'lyrics/lagu-kedua.txt', // File lirik independen dari lagu 1.
     lrcFile: 'lyrics/lagu-kedua.lrc',
     description: 'Setiap lagu adalah satu cerita baru yang ingin kusampaikan.',
