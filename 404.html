@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mengalihkan…</title>
+  <script>
+    (function () {
+      var match = window.location.pathname.match(/^(.*\/)song\/([^/]+)\/?$/);
+      if (match) {
+        window.location.replace(match[1] + '?song=' + encodeURIComponent(decodeURIComponent(match[2])) + window.location.hash);
+      } else {
+        window.location.replace('./');
+      }
+    })();
+  </script>
+</head>
+<body style="background:#061226;color:#eff2f6;font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;text-align:center;padding:24px;">
+  <p>Mengalihkan ke halaman musik… <a href="./" style="color:#f1d3aa;">Buka playlist</a></p>
+</body>
+</html>
+

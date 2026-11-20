@@ -47,7 +47,17 @@ Buka `playlist.js`, salin satu objek di array `window.PLAYLIST_TRACKS` dan tamba
 }
 ```
 
-Kemudian upload file MP3, cover, dan lirik ke folder sesuai path. **Tidak perlu membuat halaman HTML baru atau mengubah kode pemutar.** Setiap entri menggunakan pemutar yang sama.
+Kemudian upload file MP3, cover, dan lirik ke folder sesuai path. **Tidak perlu membuat halaman HTML baru secara manual atau mengubah kode pemutar.** Setiap entri menggunakan pemutar yang sama.
+
+### Memperbarui preview tautan WhatsApp (Open Graph)
+
+WhatsApp membaca metadata statis HTML tanpa menjalankan JavaScript. Setelah menambah atau mengubah lagu di `playlist.js`, jalankan perintah berikut agar setiap lagu punya halaman share `song/<id>/index.html` dengan judul `"Judul Lagu — Zandevaa"`:
+
+```bash
+node scripts/generate-share-pages.mjs
+```
+
+Lalu commit & push folder `song/` beserta perubahan lainnya ke GitHub.
 
 **Sumber musik eksternal:** `audio` juga boleh diisi URL HTTPS langsung ke file audio, misalnya `https://domain-anda.com/music/lagu-03.mp3`, asalkan pemilik server mengizinkan akses dari website. Jangan gunakan tautan ke halaman pemutar streaming, karena bukan URL file MP3.
 

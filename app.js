@@ -6,7 +6,29 @@
   'use strict';
 
   const $ = (selector) => document.querySelector(selector);
+  const BASE_URL = new URL('./', document.querySelector('script[src*="app.js"]')?.src || location.href);
+  const IS_HTTP = location.protocol === 'http:' || location.protocol === 'https:';
   const tracks = Array.isArray(window.PLAYLIST_TRACKS) ? window.PLAYLIST_TRACKS.filter(t => t && t.id && t.title && t.audio && t.lyricFile) : [];
+
+  function resolvePath(path) {
+    if (!path) return '';
+    try { return new URL(path, BASE_URL).href; }
+    catch (_e) { return path; }
+  }
+
+  function getTrackShareUrl(track) {
+    if (!track) return location.href.split('#')[0];
+    if (IS_HTTP) return new URL(`song/${encodeURIComponent(track.id)}/`, BASE_URL).href;
+    const url = new URL(location.href);
+    url.hash = '';
+    url.searchParams.set('song', track.id);
+    return url.toString();
+  }
+
+  function setMetaContent(selector, content) {
+    const el = document.querySelector(selector);
+    if (el && content) el.setAttribute('content', content);
+  }
   const audio = $('#audio');
   const playButton = $('#playButton');
   const previousButton = $('#previousButton');
@@ -63,27 +85,37 @@
   }
 
   function populateTrackInfo(track) {
+    const artist = track.artist || 'Zandevaa';
+    const fullTitle = `${track.title} — ${artist}`;
+    const coverUrl = resolvePath(track.cover || 'assets/cover-lagu-kedua.png');
+    const description = track.description || 'Sebuah lagu dan cerita yang ditulis sepenuh hati.';
     setTitle(track.title);
     $('#heroDate').textContent = track.date || 'A PERSONAL MUSIC STORY';
-    $('#heroDescription').textContent = track.description || 'Sebuah lagu dan cerita yang ditulis sepenuh hati.';
-    $('#heroCover').src = track.cover || 'assets/cover-lagu-kedua.png';
+    $('#heroDescription').textContent = description;
+    $('#heroCover').src = coverUrl;
     $('#heroCover').alt = `Cover lagu ${track.title}`;
-    $('#heroArtist').textContent = `by ${track.artist || 'Zandevaa'}`;
+    $('#heroArtist').textContent = `by ${artist}`;
     $('#heroDedication').textContent = `“${track.dedication || 'Ada cerita di balik setiap lagu.'}”`;
     $('#dedicationTitle').textContent = `— ${track.title}`;
-    $('#playerCover').src = track.cover || 'assets/cover-lagu-kedua.png';
+    $('#playerCover').src = coverUrl;
     $('#playerTitle').textContent = track.title;
-    $('#playerArtist').textContent = track.artist || 'Zandevaa';
+    $('#playerArtist').textContent = artist;
     $('#lyricsTrackTitle').textContent = track.title.toUpperCase();
-    document.title = `${track.title} — ${track.artist || 'Zandevaa'}`;
+    document.title = fullTitle;
+    setMetaContent('meta[name="description"]', description);
+    setMetaContent('meta[property="og:title"]', fullTitle);
+    setMetaContent('meta[property="og:description"]', description);
+    setMetaContent('meta[property="og:url"]', getTrackShareUrl(track));
+    setMetaContent('meta[name="twitter:title"]', fullTitle);
+    setMetaContent('meta[name="twitter:description"]', description);
     $('#lyricsScroll').setAttribute('aria-label', `Lirik lagu ${track.title}. Geser untuk membaca.`);
     $('#playlistCount').textContent = `${String(tracks.length).padStart(2, '0')} LAGU`;
     if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
-        artist: track.artist || 'Zandevaa',
+        artist,
         album: 'Music Letters',
-        artwork: [{ src: new URL(track.cover || 'assets/cover-lagu-kedua.png', location.href).href }]
+        artwork: [{ src: coverUrl }]
       });
     }
   }
@@ -103,7 +135,7 @@
       number.textContent = String(index + 1).padStart(2, '0');
       const image = document.createElement('img');
       image.className = 'playlist-thumb';
-      image.src = track.cover || 'assets/cover-lagu-kedua.png';
+      image.src = resolvePath(track.cover || 'assets/cover-lagu-kedua.png');
       image.alt = '';
       image.loading = 'lazy';
       const details = document.createElement('span');
@@ -276,7 +308,7 @@
       let text;
       if (typeof inline === 'string') text = inline;
       else {
-        const response = await fetch(track.lyricFile, { cache: 'no-cache' });
+        const response = await fetch(resolvePath(track.lyricFile), { cache: 'no-cache' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         text = await response.text();
       }
@@ -293,7 +325,7 @@
           let lrc;
           if (typeof sample === 'string') lrc = sample;
           else {
-            const resp = await fetch(track.lrcFile, { cache: 'no-cache' });
+            const resp = await fetch(resolvePath(track.lrcFile), { cache: 'no-cache' });
             if (!resp.ok) return; // Timestamp .lrc is optional.
             lrc = await resp.text();
           }
@@ -363,9 +395,7 @@
 
   function updatePageLink(track) {
     try {
-      const url = new URL(location.href);
-      url.searchParams.set('song', track.id);
-      history.replaceState({}, '', url.toString());
+      history.replaceState({}, '', getTrackShareUrl(track));
     } catch (_e) { /* E.g. sandboxed local HTML preview. */ }
   }
 
@@ -389,7 +419,7 @@
     audioHint.textContent = `Memuat sumber musik “${track.title}”…`;
     loadLyricsForTrack(track, requestId);
     if (updateUrl) updatePageLink(track);
-    audio.src = localAudioOverrides.get(track.id) || track.audio;
+    audio.src = localAudioOverrides.get(track.id) || resolvePath(track.audio);
     audio.load();
     if (autoplay) tryPlay();
   }
@@ -496,8 +526,10 @@
     }, { passive: true });
   });
   $('#shareButton').addEventListener('click', async () => {
-    const url = location.href.split('#')[0]; // Includes ?song=... to share the selected track.
-    const payload = { title: `${currentTrack().title} — ${currentTrack().artist}`, text: 'Ada lagu dan cerita kecil untukmu. ♡', url };
+    const track = currentTrack();
+    const url = getTrackShareUrl(track);
+    const shareTitle = `${track.title} — ${track.artist || 'Zandevaa'}`;
+    const payload = { title: shareTitle, text: `${shareTitle} — Ada lagu dan cerita kecil untukmu. ♡`, url };
     try {
       if (navigator.share) { await navigator.share(payload); return; }
       if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(url); showToast('Tautan lagu ini berhasil disalin ♡'); return; }
