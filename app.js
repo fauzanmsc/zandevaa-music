@@ -88,6 +88,7 @@
     const artist = track.artist || 'Zandevaa';
     const fullTitle = `${track.title} — ${artist}`;
     const coverUrl = resolvePath(track.cover || 'assets/cover-lagu-kedua.png');
+    const ogImageUrl = resolvePath(track.ogImage || track.cover || 'assets/cover-lagu-kedua.png');
     const description = track.description || 'Sebuah lagu dan cerita yang ditulis sepenuh hati.';
     setTitle(track.title);
     $('#heroDate').textContent = track.date || 'A PERSONAL MUSIC STORY';
@@ -101,13 +102,16 @@
     $('#playerTitle').textContent = track.title;
     $('#playerArtist').textContent = artist;
     $('#lyricsTrackTitle').textContent = track.title.toUpperCase();
+    document.documentElement.style.setProperty('--cover-bg', `url("${coverUrl}")`);
     document.title = fullTitle;
     setMetaContent('meta[name="description"]', description);
     setMetaContent('meta[property="og:title"]', fullTitle);
     setMetaContent('meta[property="og:description"]', description);
+    setMetaContent('meta[property="og:image"]', ogImageUrl);
     setMetaContent('meta[property="og:url"]', getTrackShareUrl(track));
     setMetaContent('meta[name="twitter:title"]', fullTitle);
     setMetaContent('meta[name="twitter:description"]', description);
+    setMetaContent('meta[name="twitter:image"]', ogImageUrl);
     $('#lyricsScroll').setAttribute('aria-label', `Lirik lagu ${track.title}. Geser untuk membaca.`);
     $('#playlistCount').textContent = `${String(tracks.length).padStart(2, '0')} LAGU`;
     if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
@@ -560,10 +564,16 @@
   });
   audio.volume = Number(volumeBar.value);
   if (tracks.length) {
-    const id = new URLSearchParams(location.search).get('song');
-    const index = tracks.findIndex(track => track.id === id);
+    const rawSongParam = new URLSearchParams(location.search).get('song');
+    const normalizedParam = rawSongParam ? rawSongParam.trim().toLowerCase() : '';
+    const index = normalizedParam
+      ? tracks.findIndex(track =>
+          track.id.toLowerCase() === normalizedParam ||
+          track.title.toLowerCase() === normalizedParam
+        )
+      : -1;
     updateRepeatUi();
-    switchTrack(index >= 0 ? index : 0, { updateUrl: index >= 0 });
+    switchTrack(index >= 0 ? index : 0, { updateUrl: IS_HTTP || index >= 0 });
   } else {
     setLyricsMessage('Belum ada lagu. Tambahkan daftar lagu di playlist.js.');
     audioHint.textContent = 'Playlist masih kosong.';

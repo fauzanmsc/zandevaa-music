@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * Generate static per-song share pages (song/<id>/index.html) and sync root index.html OG metadata.
+ * Generate static per-song share pages (song/<id>/index.html), optimized OG cover thumbnails
+ * (assets/og/<id>.jpg), and sync root index.html OG metadata.
+ *
  * WhatsApp, Telegram, Facebook, etc. read static HTML meta tags without executing JavaScript,
- * so each song gets its own static share URL with "<Judul Lagu> — <Artis>" metadata.
+ * so each song gets its own static share URL with "<Judul Lagu> — <Artis>" and its own cover.
  *
  * Usage:
  *   node scripts/generate-share-pages.mjs
@@ -12,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +22,7 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const PLAYLIST_PATH = path.join(ROOT_DIR, 'playlist.js');
 const INDEX_PATH = path.join(ROOT_DIR, 'index.html');
 const SONG_DIR = path.join(ROOT_DIR, 'song');
+const OG_DIR = path.join(ROOT_DIR, 'assets', 'og');
 
 function detectSiteUrl() {
   if (process.env.SITE_URL) {
@@ -66,47 +69,120 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function resolveOgImage(track, siteUrl) {
-  const candidates = [];
-  if (track.ogImage) candidates.push(track.ogImage);
-  candidates.push(`assets/og/${track.id}.jpg`);
-  candidates.push(`assets/og/${track.id}.png`);
-  if (track.cover) {
-    if (/\.webp$/i.test(track.cover)) {
-      candidates.push(track.cover.replace(/\.webp$/i, '.jpg'));
-      candidates.push(track.cover.replace(/\.webp$/i, '.png'));
-    }
-    candidates.push(track.cover);
+function commandExists(cmd) {
+  try {
+    execSync(`command -v ${cmd}`, { stdio: 'ignore' });
+    return true;
+  } catch (_e) {
+    return false;
   }
-  candidates.push('assets/cover.jpg');
-
-  for (const candidate of candidates) {
-    if (/^https?:\/\//i.test(candidate)) return candidate;
-    const localPath = path.join(ROOT_DIR, candidate);
-    if (fs.existsSync(localPath)) {
-      return new URL(candidate.split('/').map(encodeURIComponent).join('/'), siteUrl).href;
-    }
-  }
-  return new URL('assets/cover.jpg', siteUrl).href;
 }
 
-function buildShareMetaBlock({ title, description, imageUrl, pageUrl }) {
-  return [
+function ensureOgThumbnail(track) {
+  if (track.ogImage && /^https?:\/\//i.test(track.ogImage)) return null;
+  const sourceRel = track.ogImage || track.cover;
+  if (!sourceRel || /^https?:\/\//i.test(sourceRel)) return null;
+
+  let sourcePath = path.join(ROOT_DIR, sourceRel);
+  if (!fs.existsSync(sourcePath)) return null;
+
+  // Prefer non-webp source for sips/ImageMagick compatibility if a jpg/png sibling exists.
+  if (/\.webp$/i.test(sourcePath)) {
+    const jpgSibling = sourcePath.replace(/\.webp$/i, '.jpg');
+    const pngSibling = sourcePath.replace(/\.webp$/i, '.png');
+    if (fs.existsSync(jpgSibling)) sourcePath = jpgSibling;
+    else if (fs.existsSync(pngSibling)) sourcePath = pngSibling;
+  }
+
+  fs.mkdirSync(OG_DIR, { recursive: true });
+  const outRel = `assets/og/${track.id}.jpg`;
+  const outPath = path.join(ROOT_DIR, outRel);
+
+  const needsBuild =
+    !fs.existsSync(outPath) ||
+    fs.statSync(sourcePath).mtimeMs > fs.statSync(outPath).mtimeMs;
+
+  if (!needsBuild) return outRel;
+
+  try {
+    if (process.platform === 'darwin' && commandExists('sips')) {
+      execFileSync('sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '80', '-Z', '800', sourcePath, '--out', outPath], { stdio: 'ignore' });
+      return outRel;
+    }
+    if (commandExists('magick')) {
+      execFileSync('magick', [sourcePath, '-resize', '800x800>', '-quality', '80', '-strip', outPath], { stdio: 'ignore' });
+      return outRel;
+    }
+    if (commandExists('convert')) {
+      execFileSync('convert', [sourcePath, '-resize', '800x800>', '-quality', '80', '-strip', outPath], { stdio: 'ignore' });
+      return outRel;
+    }
+  } catch (_e) {
+    // Fall back to direct cover image below.
+  }
+  return fs.existsSync(outPath) ? outRel : null;
+}
+
+function resolveOgImage(track, siteUrl) {
+  const generated = ensureOgThumbnail(track);
+  const candidates = [];
+  if (generated) candidates.push({ path: generated, isGeneratedJpg: true });
+  if (track.ogImage) candidates.push({ path: track.ogImage, isGeneratedJpg: false });
+  candidates.push({ path: `assets/og/${track.id}.jpg`, isGeneratedJpg: true });
+  if (track.cover) {
+    if (/\.webp$/i.test(track.cover)) {
+      candidates.push({ path: track.cover.replace(/\.webp$/i, '.jpg'), isGeneratedJpg: false });
+      candidates.push({ path: track.cover.replace(/\.webp$/i, '.png'), isGeneratedJpg: false });
+    }
+    candidates.push({ path: track.cover, isGeneratedJpg: false });
+  }
+  candidates.push({ path: 'assets/cover.jpg', isGeneratedJpg: false });
+
+  for (const candidate of candidates) {
+    if (/^https?:\/\//i.test(candidate.path)) {
+      return { url: candidate.path, type: '', width: 0, height: 0 };
+    }
+    const localPath = path.join(ROOT_DIR, candidate.path);
+    if (fs.existsSync(localPath)) {
+      const url = new URL(candidate.path.split('/').map(encodeURIComponent).join('/'), siteUrl).href;
+      const ext = path.extname(candidate.path).toLowerCase();
+      const type = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.png' ? 'image/png' : '';
+      return {
+        url,
+        type,
+        width: candidate.isGeneratedJpg ? 800 : 0,
+        height: candidate.isGeneratedJpg ? 800 : 0,
+      };
+    }
+  }
+  return { url: new URL('assets/cover.jpg', siteUrl).href, type: 'image/jpeg', width: 0, height: 0 };
+}
+
+function buildShareMetaBlock({ title, description, image, pageUrl }) {
+  const lines = [
     `  <!-- SHARE_META_START -->`,
     `  <meta name="description" content="${escapeHtml(description)}" />`,
     `  <meta property="og:type" content="website" />`,
     `  <meta property="og:title" content="${escapeHtml(title)}" />`,
     `  <meta property="og:description" content="${escapeHtml(description)}" />`,
-    `  <meta property="og:image" content="${escapeHtml(imageUrl)}" />`,
+    `  <meta property="og:image" content="${escapeHtml(image.url)}" />`,
+  ];
+  if (image.type) lines.push(`  <meta property="og:image:type" content="${escapeHtml(image.type)}" />`);
+  if (image.width && image.height) {
+    lines.push(`  <meta property="og:image:width" content="${image.width}" />`);
+    lines.push(`  <meta property="og:image:height" content="${image.height}" />`);
+  }
+  lines.push(
     `  <meta property="og:url" content="${escapeHtml(pageUrl)}" />`,
     `  <meta property="og:locale" content="id_ID" />`,
     `  <meta name="twitter:card" content="summary_large_image" />`,
     `  <meta name="twitter:title" content="${escapeHtml(title)}" />`,
     `  <meta name="twitter:description" content="${escapeHtml(description)}" />`,
-    `  <meta name="twitter:image" content="${escapeHtml(imageUrl)}" />`,
+    `  <meta name="twitter:image" content="${escapeHtml(image.url)}" />`,
     `  <title>${escapeHtml(title)}</title>`,
-    `  <!-- SHARE_META_END -->`,
-  ].join('\n');
+    `  <!-- SHARE_META_END -->`
+  );
+  return lines.join('\n');
 }
 
 function buildSongPageHtml(track, siteUrl) {
@@ -115,7 +191,7 @@ function buildSongPageHtml(track, siteUrl) {
   const description = track.description || `Dengarkan "${track.title}" oleh ${artist} lengkap dengan liriknya.`;
   const encodedId = encodeURIComponent(track.id);
   const pageUrl = new URL(`song/${encodedId}/`, siteUrl).href;
-  const imageUrl = resolveOgImage(track, siteUrl);
+  const image = resolveOgImage(track, siteUrl);
   const redirectTarget = `../../?song=${encodedId}`;
 
   return `<!doctype html>
@@ -124,7 +200,7 @@ function buildSongPageHtml(track, siteUrl) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#061226" />
-${buildShareMetaBlock({ title: fullTitle, description, imageUrl, pageUrl })}
+${buildShareMetaBlock({ title: fullTitle, description, image, pageUrl })}
   <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
   <link rel="canonical" href="${escapeHtml(pageUrl)}" />
   <script>
@@ -147,8 +223,8 @@ function syncRootIndex(firstTrack, siteUrl) {
   const artist = firstTrack.artist || 'Zandevaa';
   const fullTitle = `${firstTrack.title} — ${artist}`;
   const description = firstTrack.description || `Dengarkan "${firstTrack.title}" oleh ${artist} lengkap dengan liriknya.`;
-  const imageUrl = resolveOgImage(firstTrack, siteUrl);
-  const metaBlock = buildShareMetaBlock({ title: fullTitle, description, imageUrl, pageUrl: siteUrl });
+  const image = resolveOgImage(firstTrack, siteUrl);
+  const metaBlock = buildShareMetaBlock({ title: fullTitle, description, image, pageUrl: siteUrl });
 
   const markerRegex = /[ \t]*<!-- SHARE_META_START -->[\s\S]*?<!-- SHARE_META_END -->/;
   if (!markerRegex.test(indexHtml)) {
@@ -187,4 +263,3 @@ function main() {
 }
 
 main();
-
