@@ -1,4 +1,4 @@
-const CACHE_NAME = 'zandevaa-music-v1';
+const CACHE_NAME = 'zandevaa-music-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -39,14 +39,20 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
-  // Never intercept HTTP Range requests (preserves Safari/Chrome audio scrubbing & seeking).
-  if (req.headers.has('range')) return;
-
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // Network-first for HTML & JS/CSS/playlist/lyrics so updates arrive immediately when online,
-  // with full offline fallback from cache.
+  // Never intercept Range requests or audio streams — let the browser stream MP3 natively
+  // so mobile Safari/Chrome never stalls or hits memory limits while playing.
+  if (
+    req.headers.has('range') ||
+    req.destination === 'audio' ||
+    /\.(mp3|m4a|wav|ogg|aac|flac)$/i.test(url.pathname)
+  ) {
+    return;
+  }
+
+  // Network-first for HTML, JS, CSS, lyrics so updates appear right away when online.
   const isFreshAsset = /\.(html|js|css|txt|lrc|webmanifest)$/i.test(url.pathname) || url.pathname.endsWith('/');
   if (isFreshAsset) {
     event.respondWith(
@@ -63,7 +69,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for covers, icons, and full media fetches for instant repeat loads & offline playback.
+  // Cache-first for lightweight images & icons.
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached) return cached;

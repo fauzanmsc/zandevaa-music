@@ -8,7 +8,14 @@
   const $ = (selector) => document.querySelector(selector);
   const BASE_URL = new URL('./', document.querySelector('script[src*="app.js"]')?.src || location.href);
   const IS_HTTP = location.protocol === 'http:' || location.protocol === 'https:';
+  const IS_IOS = /iPad|iPhone|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const IS_MOBILE = window.matchMedia?.('(max-width: 768px)').matches || ('ontouchstart' in window);
   const tracks = Array.isArray(window.PLAYLIST_TRACKS) ? window.PLAYLIST_TRACKS.filter(t => t && t.id && t.title && t.audio && t.lyricFile) : [];
+
+  function triggerHaptic(ms = 10) {
+    try { if (typeof navigator.vibrate === 'function') navigator.vibrate(ms); }
+    catch (_e) { /* Unsupported. */ }
+  }
 
   function resolvePath(path) {
     if (!path) return '';
@@ -87,9 +94,11 @@
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         favorites: [...favorites],
+        playCounts,
         shuffle: shuffleMode,
         repeatMode,
         eqPreset,
+        playbackSpeed,
         volume: targetVolume,
         lastTrackId: currentTrack()?.id || '',
         lastTime: Number.isFinite(audio.currentTime) ? Math.floor(audio.currentTime) : 0
@@ -101,6 +110,10 @@
   let upcomingIndex = 0;
   let ready = false;
   let audioFailed = false;
+  let userWantsPlaying = false;
+  let networkRetryCount = 0;
+  let networkRetryTimer = null;
+  let stallWatchTimer = null;
   let isSeeking = false;
   let seekPointerId = null;
   let activeSeekControl = null;
@@ -109,8 +122,16 @@
   let shuffleMode = Boolean(prefs.shuffle);
   let repeatMode = ['off', 'all', 'one'].includes(prefs.repeatMode) ? prefs.repeatMode : 'off';
   let eqPreset = EQ_PRESETS[prefs.eqPreset] ? prefs.eqPreset : 'normal';
+  let playbackSpeed = [0.85, 0.95, 1, 1.1].includes(Number(prefs.playbackSpeed)) ? Number(prefs.playbackSpeed) : 1;
   let targetVolume = Number.isFinite(prefs.volume) ? Math.min(1, Math.max(0, prefs.volume)) : Number(volumeBar.value || 0.85);
   let favorites = new Set(Array.isArray(prefs.favorites) ? prefs.favorites : []);
+  const playCounts = (prefs.playCounts && typeof prefs.playCounts === 'object') ? { ...prefs.playCounts } : {};
+  let countedTrackSession = false;
+  let isCinemaMode = false;
+  let pendingMomentToast = '';
+  let cachedAccentColor = '#f1cfa8';
+  let cachedRoseColor = '#f2968e';
+  const preloadedCovers = new Set();
   let playlistFilter = 'all'; // 'all' | 'favorites'
   let playlistQuery = '';
   const trackDurations = new Map();
@@ -432,6 +453,8 @@
     }
 
     currentPalette = { ...palette, isLight, pageHex };
+    cachedAccentColor = vars['--accent'] || '#f1cfa8';
+    cachedRoseColor = vars['--rose'] || '#f2968e';
     document.documentElement.dataset.themeMode = isLight ? 'light' : 'dark';
     const rootStyle = document.documentElement.style;
     for (const [name, value] of Object.entries(vars)) rootStyle.setProperty(name, value);
@@ -559,17 +582,32 @@
     $('#lyricsScroll').setAttribute('aria-label', `Lirik lagu ${track.title}. Geser untuk membaca.`);
     $('#playlistCount').textContent = `${String(tracks.length).padStart(2, '0')} LAGU`;
     if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
+      const jpegArt = resolvePath(`assets/og/${track.id}.jpg`);
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist,
-        album: 'Music Stories',
-        artwork: [{ src: coverUrl }]
+        album: 'Music Stories — Zandevaa',
+        artwork: [
+          { src: jpegArt, sizes: '800x800', type: 'image/jpeg' },
+          { src: coverUrl, sizes: '1000x1000', type: /\.png$/i.test(coverUrl) ? 'image/png' : 'image/webp' }
+        ]
       });
     }
   }
 
+  function getMostPlayedTrackId() {
+    let bestId = '';
+    let bestCount = 1; // Only show badge once a track has been played at least 2 times
+    for (const track of tracks) {
+      const count = Number(playCounts[track.id] || 0);
+      if (count > bestCount) { bestCount = count; bestId = track.id; }
+    }
+    return bestId;
+  }
+
   function renderPlaylist() {
     if ($('#favCountBadge')) $('#favCountBadge').textContent = String(favorites.size);
+    const topPlayedId = getMostPlayedTrackId();
     const query = playlistQuery.trim().toLowerCase();
     const filtered = tracks
       .map((track, index) => ({ track, index }))
@@ -618,6 +656,12 @@
         heart.setAttribute('aria-label', 'Favorit');
         title.append(heart);
       }
+      if (track.id === topPlayedId) {
+        const topBadge = document.createElement('span');
+        topBadge.className = 'playlist-top-badge';
+        topBadge.textContent = '✦ Sering diputar';
+        title.append(topBadge);
+      }
       const artist = document.createElement('small');
       artist.textContent = track.artist || 'Zandevaa';
       details.append(title, artist);
@@ -627,7 +671,10 @@
       const icon = document.createElement('span');
       icon.className = 'playlist-indicator';
       icon.setAttribute('aria-hidden', 'true');
-      icon.textContent = selected ? '♪' : '↗';
+      icon.innerHTML = '<svg class="pi-play" viewBox="0 0 24 24"><path d="M8.5 5.6v12.8c0 .8.9 1.3 1.6.9l9.4-6.4a1.1 1.1 0 0 0 0-1.8L10.1 4.7c-.7-.4-1.6.1-1.6.9Z" /></svg><span class="pi-eq"><i></i><i></i><i></i></span>';
+      if (selected && !audio.paused && !audio.ended && !audio.error) {
+        button.classList.add('currently-playing');
+      }
       button.append(number, image, details, dur, icon);
       list.append(button);
     });
@@ -639,6 +686,11 @@
     document.body.classList.toggle('is-playing', playing);
     playButton.setAttribute('aria-label', playing ? 'Jeda lagu' : `Putar ${currentTrack()?.title || 'lagu'}`);
     playButton.title = playing ? 'Jeda' : 'Putar';
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+      } catch (_e) { /* Optional. */ }
+    }
     if (playing) {
       trackState.textContent = 'NOW PLAYING';
       startVisualizerLoop();
@@ -654,6 +706,27 @@
     updateMediaPositionState();
   }
 
+  function applyPlaybackSpeed(speed, { silent = false } = {}) {
+    const val = [0.85, 0.95, 1, 1.1].includes(Number(speed)) ? Number(speed) : 1;
+    playbackSpeed = val;
+    audio.playbackRate = val;
+    if ('preservesPitch' in audio) audio.preservesPitch = val >= 0.95;
+    if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = val >= 0.95;
+    eqModal?.querySelectorAll('.speed-pill').forEach((btn) => {
+      btn.classList.toggle('active', Number(btn.dataset.speed) === val);
+    });
+    const active = eqPreset !== 'normal' || playbackSpeed !== 1;
+    for (const btn of [$('#eqButton'), $('#sheetEqButton')]) {
+      if (btn) btn.setAttribute('aria-pressed', String(active));
+    }
+    updateMediaPositionState();
+    savePrefs();
+    if (!silent) {
+      const label = val === 0.85 ? '0.85× Slowed' : val === 0.95 ? '0.95× Chill' : val === 1.1 ? '1.1× Bright' : '1.0× Normal';
+      showToast(`Playback Mood: ${label}`);
+    }
+  }
+
   function applyEqPreset(presetKey, { silent = false } = {}) {
     const key = EQ_PRESETS[presetKey] ? presetKey : 'normal';
     eqPreset = key;
@@ -664,25 +737,29 @@
       midEqNode.gain.setTargetAtTime(p.mid, now, 0.04);
       highEqNode.gain.setTargetAtTime(p.high, now, 0.04);
     }
-    const active = key !== 'normal';
+    const active = key !== 'normal' || playbackSpeed !== 1;
     for (const btn of [$('#eqButton'), $('#sheetEqButton')]) {
       if (!btn) continue;
       btn.setAttribute('aria-pressed', String(active));
-      btn.title = `Equalizer: ${p.label}`;
+      btn.title = `Audio & Mood: ${p.label}`;
     }
     eqModal?.querySelectorAll('.eq-option').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.eq === key);
     });
     if ($('#eqStatusText')) {
-      $('#eqStatusText').textContent = `Preset aktif: ${p.label}`;
+      $('#eqStatusText').textContent = `EQ: ${p.label} · Speed: ${playbackSpeed}×`;
     }
     savePrefs();
     if (!silent) showToast(`Equalizer: ${p.label}`);
   }
 
-  function ensureAudioGraph() {
+  function ensureAudioGraph({ force = false } = {}) {
     if (audioGraphReady || audioGraphFailed) return;
     if (!IS_HTTP && !String(audio.src || '').startsWith('blob:')) return;
+    // Keep ALL mobile browsers (Android Chrome & iOS Safari/Chrome) on the native <audio> pipeline
+    // by default so background playback & lock-screen media controls stay 100% alive without
+    // AudioContext background suspension. Only attach Web Audio on mobile if user picks custom EQ.
+    if ((IS_IOS || IS_MOBILE) && !force && eqPreset === 'normal') return;
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) { audioGraphFailed = true; return; }
     try {
@@ -732,42 +809,37 @@
   }
 
   function startVisualizerLoop() {
-    if (visualizerRaf) return;
+    // Only animate canvas when Now Playing player tab is actively visible (zero mobile background drain!)
+    if (visualizerRaf || document.hidden || !isSheetOpen || activeSheetTab !== 'player') return;
     const ctx = visualizerCanvas?.getContext('2d');
+    if (!ctx) return;
     const barCount = 34;
     let phase = 0;
+    let lastFrameTime = 0;
+    const frameInterval = IS_MOBILE ? 42 : 25; // ~24fps on mobile, ~40fps on desktop
 
-    const draw = () => {
+    const draw = (now) => {
+      if (document.hidden || !isSheetOpen || activeSheetTab !== 'player' || audio.paused || audio.ended) {
+        stopVisualizerLoop();
+        return;
+      }
       visualizerRaf = requestAnimationFrame(draw);
-      const playing = !audio.paused && !audio.ended;
-      if (!playing) { stopVisualizerLoop(); return; }
+      if (now - lastFrameTime < frameInterval) return;
+      lastFrameTime = now;
 
-      phase += 0.09;
-      let bassEnergy = 0;
-
+      phase += 0.14;
       if (audioGraphReady && analyserNode && freqData) {
         analyserNode.getByteFrequencyData(freqData);
-        let sum = 0;
-        for (let i = 0; i < 6; i++) sum += freqData[i];
-        bassEnergy = clamp(sum / (6 * 255), 0, 1);
-      } else {
-        bassEnergy = 0.25 + 0.18 * Math.abs(Math.sin(phase * 1.1));
       }
 
-      document.documentElement.style.setProperty('--beat-pulse', bassEnergy.toFixed(3));
-
-      if (!ctx || !isSheetOpen || activeSheetTab !== 'player') return;
       const w = visualizerCanvas.width;
       const h = visualizerCanvas.height;
       ctx.clearRect(0, 0, w, h);
 
-      const style = getComputedStyle(document.documentElement);
-      const accentColor = style.getPropertyValue('--accent').trim() || '#f1cfa8';
-      const roseColor = style.getPropertyValue('--rose').trim() || '#f2968e';
       const grad = ctx.createLinearGradient(0, 0, w, 0);
-      grad.addColorStop(0, accentColor);
-      grad.addColorStop(0.5, roseColor);
-      grad.addColorStop(1, accentColor);
+      grad.addColorStop(0, cachedAccentColor);
+      grad.addColorStop(0.5, cachedRoseColor);
+      grad.addColorStop(1, cachedAccentColor);
       ctx.fillStyle = grad;
 
       const gap = 4;
@@ -796,14 +868,12 @@
 
   function stopVisualizerLoop() {
     if (visualizerRaf) { cancelAnimationFrame(visualizerRaf); visualizerRaf = null; }
-    document.documentElement.style.setProperty('--beat-pulse', '0');
     const ctx = visualizerCanvas?.getContext('2d');
     if (ctx) {
       const w = visualizerCanvas.width;
       const h = visualizerCanvas.height;
       ctx.clearRect(0, 0, w, h);
-      const style = getComputedStyle(document.documentElement);
-      ctx.fillStyle = style.getPropertyValue('--track-rail').trim() || 'rgba(255,255,255,0.2)';
+      ctx.fillStyle = 'rgba(180, 195, 220, 0.22)';
       const barCount = 34;
       const gap = 4;
       const barW = (w - gap * (barCount - 1)) / barCount;
@@ -872,7 +942,9 @@
       fileInput.click();
       return;
     }
+    userWantsPlaying = true;
     clearTimeout(pauseFadeTimer);
+    clearTimeout(networkRetryTimer);
     ensureAudioGraph();
     if (audioCtx && audioCtx.state === 'suspended') {
       try { await audioCtx.resume(); } catch (_e) { /* Ignore. */ }
@@ -889,11 +961,15 @@
     catch (error) {
       if (error?.name === 'AbortError') return;
       if (audio.error) return;
+      userWantsPlaying = false;
       showToast('Audio tidak dapat diputar. Pastikan sumber MP3 dapat diakses.');
     }
   }
 
   function smoothPause(durationMs = 180) {
+    userWantsPlaying = false;
+    clearTimeout(networkRetryTimer);
+    clearTimeout(stallWatchTimer);
     if (audio.paused) return;
     clearTimeout(pauseFadeTimer);
     if (audioGraphReady && gainNode && audioCtx) {
@@ -911,27 +987,42 @@
   }
 
   function togglePlay() {
+    triggerHaptic(10);
     if (audio.paused) tryPlay();
     else smoothPause(170);
   }
 
   function progress() {
+    const elapsed = audio.currentTime || 0;
     const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+    const sec = Math.floor(elapsed);
+    if (ready && !audio.paused && !countedTrackSession && sec >= 12) {
+      countedTrackSession = true;
+      const track = currentTrack();
+      if (track) {
+        playCounts[track.id] = (Number(playCounts[track.id]) || 0) + 1;
+        savePrefs();
+        if (!document.hidden) renderPlaylist();
+      }
+    }
+    if (ready && sec !== lastSavedSecond && sec % 10 === 0) {
+      lastSavedSecond = sec;
+      savePrefs();
+      updateMediaPositionState();
+    }
+    // Skip DOM updates while app is minimized / screen is off to keep background audio ultra-light.
+    if (document.hidden) return;
     if (isSeeking) {
       $('#totalTime').textContent = timeString(duration);
       if ($('#sheetTotalTime')) $('#sheetTotalTime').textContent = timeString(duration);
       return;
     }
-    const elapsed = audio.currentTime || 0;
     updateTimeDisplays(elapsed, duration);
     const percentage = duration ? clamp(elapsed / duration * 100, 0, 100) : 0;
     setSeekVisual(percentage);
     syncActiveLyric(elapsed);
-    const sec = Math.floor(elapsed);
-    if (ready && sec !== lastSavedSecond && sec % 5 === 0) {
-      lastSavedSecond = sec;
-      savePrefs();
-      updateMediaPositionState();
+    if ($('#shareMomentLabel')) {
+      $('#shareMomentLabel').textContent = sec >= 3 ? timeString(sec) : 'Momen';
     }
   }
 
@@ -1152,16 +1243,44 @@
     } catch (_e) { /* E.g. sandboxed local HTML preview. */ }
   }
 
-  function switchTrack(index, { autoplay = false, updateUrl = true } = {}) {
+  function preloadCover(path) {
+    if (!path) return;
+    const url = resolvePath(path);
+    if (preloadedCovers.has(url)) return;
+    preloadedCovers.add(url);
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = url;
+  }
+
+  function triggerTrackTransition() {
+    const targets = [$('#heroCover'), $('#sheetCover'), $('#pageTitle')].filter(Boolean);
+    targets.forEach((el) => el.classList.add('is-transitioning'));
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        targets.forEach((el) => el.classList.remove('is-transitioning'));
+      });
+    });
+  }
+
+  function switchTrack(index, { autoplay = false, updateUrl = true, animate = false, fromEnded = false } = {}) {
     if (!tracks.length || index < 0 || index >= tracks.length) return;
+    if (animate && !document.hidden) {
+      triggerHaptic(12);
+      triggerTrackTransition();
+    }
+    clearTimeout(networkRetryTimer);
+    clearTimeout(stallWatchTimer);
+    networkRetryCount = 0;
     activeIndex = index;
+    countedTrackSession = false;
+    userWantsPlaying = Boolean(autoplay);
     const track = currentTrack();
     const requestId = ++lyricRequest;
-    audio.pause();
+    // Keep background MediaSession focus continuous on auto-advance (do not strip src or pause first).
+    if (!fromEnded && !autoplay) audio.pause();
     ready = false;
     audioFailed = false;
-    audio.removeAttribute('src');
-    audio.load();
     populateTrackInfo(track);
     renderPlaylist();
     setReady(false);
@@ -1177,6 +1296,7 @@
     if (updateUrl) updatePageLink(track);
     audio.src = localAudioOverrides.get(track.id) || resolvePath(track.audio);
     audio.load();
+    applyPlaybackSpeed(playbackSpeed, { silent: true });
     savePrefs();
     if (autoplay) tryPlay();
   }
@@ -1198,17 +1318,19 @@
     if (!upNextBtn || !next) return;
     if (tracks.length <= 1) { upNextBtn.hidden = true; return; }
     upNextBtn.hidden = false;
-    $('#upNextCover').src = resolvePath(next.cover || 'assets/cover-lagu-kedua.png');
+    const nextCover = next.cover || 'assets/cover-lagu-kedua.webp';
+    preloadCover(nextCover);
+    $('#upNextCover').src = resolvePath(nextCover);
     $('#upNextTitle').textContent = next.title;
   }
 
   function nextTrack() {
     const target = upcomingIndex !== activeIndex ? upcomingIndex : computeNextIndex();
-    switchTrack(target, { autoplay: true });
+    switchTrack(target, { autoplay: true, animate: true });
   }
   function previousTrack() {
     if (ready && audio.currentTime > 3) { audio.currentTime = 0; progress(); return; }
-    switchTrack((activeIndex - 1 + tracks.length) % tracks.length, { autoplay: true });
+    switchTrack((activeIndex - 1 + tracks.length) % tracks.length, { autoplay: true, animate: true });
   }
 
   function updateRepeatUi() {
@@ -1253,6 +1375,7 @@
   }
 
   function toggleFavorite() {
+    triggerHaptic(14);
     const track = currentTrack();
     if (!track) return;
     if (favorites.has(track.id)) {
@@ -1310,6 +1433,71 @@
     } catch (e) { if (e.name !== 'AbortError') showToast('Salin URL browser untuk membagikan lagu ini.'); }
   }
 
+  async function shareCurrentMoment() {
+    const track = currentTrack();
+    if (!track) return;
+    const sec = Math.max(0, Math.floor(audio.currentTime || 0));
+    const base = getTrackShareUrl(track);
+    const url = sec > 0 ? `${base}#t=${sec}` : base;
+    const shareTitle = `${track.title} — ${track.artist || 'Zandevaa'}`;
+    const text = sec > 0
+      ? `Dengerin momen di ${timeString(sec)} dari “${track.title}” — ${track.artist || 'Zandevaa'} ♡`
+      : `${shareTitle} — Ada lagu dan cerita kecil untukmu. ♡`;
+    try {
+      if (navigator.share) { await navigator.share({ title: shareTitle, text, url }); return; }
+      if (await copyTextSafe(url)) {
+        showToast(sec > 0 ? `Tautan momen (${timeString(sec)}) berhasil disalin ♡` : 'Tautan lagu ini berhasil disalin ♡');
+        return;
+      }
+      throw new Error('Clipboard tidak tersedia');
+    } catch (e) { if (e.name !== 'AbortError') showToast('Salin URL browser untuk membagikan momen ini.'); }
+  }
+
+  function replyViaWhatsApp() {
+    const track = currentTrack();
+    const title = track?.title || 'lagu ini';
+    const message = `Barusan dengerin “${title}” — ${track?.artist || 'Zandevaa'} 🎧\n`;
+    const waNumber = String(window.ZANDEVAA_WA_NUMBER || '').replace(/[^\d]/g, '');
+    const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(message)}`;
+    window.open(waUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  function setCinemaMode(active) {
+    isCinemaMode = Boolean(active);
+    nowPlayingSheet?.classList.toggle('is-cinema', isCinemaMode);
+    $('#cinemaModeButton')?.setAttribute('aria-pressed', String(isCinemaMode));
+  }
+
+  function attachDoubleTapSkip(targetEl, feedbackEl) {
+    if (!targetEl) return;
+    let lastTapTime = 0;
+    let lastTapSide = '';
+    let hideTimer = null;
+    targetEl.addEventListener('pointerup', (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      const now = Date.now();
+      const rect = targetEl.getBoundingClientRect();
+      const side = (event.clientX - rect.left) < rect.width / 2 ? 'left' : 'right';
+      if (now - lastTapTime < 310 && side === lastTapSide) {
+        lastTapTime = 0;
+        if (!ready) return;
+        const delta = side === 'left' ? -10 : 10;
+        changeTime(delta);
+        triggerHaptic(14);
+        if (feedbackEl) {
+          feedbackEl.textContent = side === 'left' ? '↺ -10 dtk' : '+10 dtk ↻';
+          feedbackEl.classList.remove('align-left', 'align-right');
+          feedbackEl.classList.add(side === 'left' ? 'align-left' : 'align-right', 'is-visible');
+          clearTimeout(hideTimer);
+          hideTimer = setTimeout(() => feedbackEl.classList.remove('is-visible'), 560);
+        }
+      } else {
+        lastTapTime = now;
+        lastTapSide = side;
+      }
+    });
+  }
+
   // ─── Full-Screen Now Playing Sheet & Mini Dock ───
   function setSheetTab(tab) {
     activeSheetTab = tab === 'lyrics' ? 'lyrics' : 'player';
@@ -1320,25 +1508,35 @@
     $('#tabPlayerBtn').setAttribute('aria-selected', String(!isLyrics));
     $('#tabLyricsBtn').classList.toggle('active', isLyrics);
     $('#tabLyricsBtn').setAttribute('aria-selected', String(isLyrics));
-    if (isLyrics && lastActiveLine >= 0) {
-      requestAnimationFrame(() => centerLyric(sheetLyricLines[lastActiveLine]?.element, sheetLyricsScroll));
+    if (isLyrics) {
+      setCinemaMode(false);
+      stopVisualizerLoop();
+      if (lastActiveLine >= 0) {
+        requestAnimationFrame(() => centerLyric(sheetLyricLines[lastActiveLine]?.element, sheetLyricsScroll));
+      }
+    } else if (!audio.paused && isSheetOpen) {
+      startVisualizerLoop();
     }
   }
 
   function openNowPlayingSheet(tab = 'player') {
     if (!nowPlayingSheet) return;
-    setSheetTab(tab);
     isSheetOpen = true;
+    setCinemaMode(false);
+    setSheetTab(tab);
     nowPlayingSheet.hidden = false;
     nowPlayingSheet.setAttribute('aria-hidden', 'false');
     document.body.classList.add('sheet-open');
     requestAnimationFrame(() => nowPlayingSheet.classList.add('is-open'));
-    if (audio.paused) stopVisualizerLoop();
+    if (!audio.paused && activeSheetTab === 'player') startVisualizerLoop();
+    else stopVisualizerLoop();
   }
 
   function closeNowPlayingSheet() {
     if (!nowPlayingSheet || !isSheetOpen) return;
     isSheetOpen = false;
+    setCinemaMode(false);
+    stopVisualizerLoop();
     nowPlayingSheet.classList.remove('is-open');
     nowPlayingSheet.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('sheet-open');
@@ -1694,7 +1892,7 @@
     if (!button) return;
     const index = Number(button.dataset.trackIndex);
     if (index === activeIndex) { togglePlay(); return; }
-    switchTrack(index, { autoplay: true });
+    switchTrack(index, { autoplay: true, animate: true });
   });
   playButton.addEventListener('click', togglePlay);
   previousButton.addEventListener('click', previousTrack);
@@ -1786,6 +1984,7 @@
 
   audio.addEventListener('loadedmetadata', () => {
     setReady(true);
+    applyPlaybackSpeed(playbackSpeed, { silent: true });
     const track = currentTrack();
     if (track && Number.isFinite(audio.duration) && audio.duration > 0) {
       const formatted = timeString(audio.duration);
@@ -1794,19 +1993,83 @@
         renderPlaylist();
       }
     }
-    if (pendingRestoreTime > 2 && Number.isFinite(audio.duration) && pendingRestoreTime < audio.duration - 5) {
+    if (pendingRestoreTime > 0 && Number.isFinite(audio.duration) && pendingRestoreTime < audio.duration - 2) {
       audio.currentTime = pendingRestoreTime;
       pendingRestoreTime = 0;
+      if (pendingMomentToast) {
+        showToast(pendingMomentToast);
+        pendingMomentToast = '';
+      }
     }
     progress();
     updateMediaPositionState();
   });
   audio.addEventListener('durationchange', progress);
   audio.addEventListener('timeupdate', progress);
+  function recoverPlayback(reason) {
+    if (!userWantsPlaying || !currentTrack()) return;
+    if (networkRetryCount >= 3) return;
+    networkRetryCount++;
+    const resumeAt = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+    const src = localAudioOverrides.get(currentTrack().id) || resolvePath(currentTrack().audio);
+    clearTimeout(networkRetryTimer);
+    networkRetryTimer = setTimeout(() => {
+      if (!userWantsPlaying) return;
+      if (reason === 'error' || audio.error || audio.readyState === 0) {
+        pendingRestoreTime = resumeAt;
+        audio.src = src;
+        audio.load();
+      }
+      audio.play().catch(() => { /* Retry will clear on next user interaction if blocked. */ });
+    }, 900 * networkRetryCount);
+  }
+
+  audio.addEventListener('playing', () => {
+    networkRetryCount = 0;
+    clearTimeout(networkRetryTimer);
+    clearTimeout(stallWatchTimer);
+    updatePlayState();
+  });
   audio.addEventListener('play', updatePlayState);
-  audio.addEventListener('pause', updatePlayState);
+  audio.addEventListener('pause', () => {
+    clearTimeout(stallWatchTimer);
+    updatePlayState();
+  });
+  const watchForStall = () => {
+    if (!userWantsPlaying || audio.paused || audio.ended) return;
+    clearTimeout(stallWatchTimer);
+    const snapTime = audio.currentTime;
+    stallWatchTimer = setTimeout(() => {
+      if (userWantsPlaying && !audio.paused && !audio.ended && Math.abs(audio.currentTime - snapTime) < 0.05) {
+        recoverPlayback('stall');
+      }
+    }, 3500);
+  };
+  audio.addEventListener('stalled', watchForStall);
+  audio.addEventListener('waiting', watchForStall);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      stopVisualizerLoop();
+      savePrefs();
+      // Keep audio flowing cleanly in background if user was playing.
+      if (userWantsPlaying && audioGraphReady && audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => { /* Ignore. */ });
+      }
+    } else {
+      if (audioGraphReady && audioCtx && audioCtx.state === 'suspended' && !audio.paused) {
+        audioCtx.resume().catch(() => { /* Ignore. */ });
+      }
+      if (!audio.paused && isSheetOpen && activeSheetTab === 'player') {
+        startVisualizerLoop();
+      }
+      updateMediaPositionState();
+    }
+  });
   audio.addEventListener('ended', () => {
+    clearTimeout(stallWatchTimer);
+    clearTimeout(networkRetryTimer);
     if (sleepMode === 'end-of-track') {
+      userWantsPlaying = false;
       sleepMode = 'off';
       updateSleepUi();
       updatePlayState();
@@ -1814,12 +2077,30 @@
       return;
     }
     if (repeatMode === 'one') { audio.currentTime = 0; tryPlay(); return; }
-    if (shuffleMode && tracks.length > 1) { nextTrack(); return; }
-    if (activeIndex < tracks.length - 1) { switchTrack(activeIndex + 1, { autoplay: true }); return; }
-    if (repeatMode === 'all') { switchTrack(0, { autoplay: true }); return; }
+    if (shuffleMode && tracks.length > 1) {
+      const target = upcomingIndex !== activeIndex ? upcomingIndex : computeNextIndex();
+      switchTrack(target, { autoplay: true, fromEnded: true });
+      return;
+    }
+    if (activeIndex < tracks.length - 1) {
+      switchTrack(activeIndex + 1, { autoplay: true, fromEnded: true });
+      return;
+    }
+    if (repeatMode === 'all') {
+      switchTrack(0, { autoplay: true, fromEnded: true });
+      return;
+    }
+    userWantsPlaying = false;
     updatePlayState();
   });
   audio.addEventListener('error', () => {
+    // Auto-recover transient mid-song network interruptions (MEDIA_ERR_NETWORK = 2)
+    // instead of giving up and stopping playback.
+    if (userWantsPlaying && audio.error?.code === 2 && networkRetryCount < 3) {
+      recoverPlayback('error');
+      return;
+    }
+    userWantsPlaying = false;
     audioFailed = true;
     ready = false;
     setReady(false);
@@ -1840,6 +2121,9 @@
     pendingSeekTime = targetTime;
     setSeekVisual(ratio * 100);
     updateTimeDisplays(targetTime, audio.duration);
+    const tipText = timeString(targetTime);
+    if ($('#seekTooltip')) $('#seekTooltip').textContent = tipText;
+    if ($('#sheetSeekTooltip')) $('#sheetSeekTooltip').textContent = tipText;
     syncActiveLyric(targetTime);
     if (commit) {
       audio.currentTime = targetTime;
@@ -1853,6 +2137,7 @@
       if (!ready || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
       if (event.pointerType === 'mouse' && event.button !== 0) return;
       event.preventDefault();
+      triggerHaptic(8);
       isSeeking = true;
       seekPointerId = event.pointerId;
       activeSeekControl = controlEl;
@@ -1987,9 +2272,22 @@
   $('#sheetLyricsNextButton')?.addEventListener('click', nextTrack);
   $('#upNextButton')?.addEventListener('click', nextTrack);
 
-  // Share buttons
+  // Share buttons, Share Moment, Cinema Mode, Double-Tap Skip & WA Reply
   $('#shareButton').addEventListener('click', shareCurrentTrack);
   $('#sheetShareButton')?.addEventListener('click', shareCurrentTrack);
+  $('#shareMomentButton')?.addEventListener('click', shareCurrentMoment);
+  $('#replyWaButton')?.addEventListener('click', replyViaWhatsApp);
+  $('#cinemaModeButton')?.addEventListener('click', () => {
+    setCinemaMode(!isCinemaMode);
+    if (isCinemaMode) showToast('Mode Cinema aktif · ketuk layar untuk kembali');
+  });
+  nowPlayingSheet?.addEventListener('click', (event) => {
+    if (!isCinemaMode) return;
+    if (event.target.closest('#cinemaModeButton')) return;
+    setCinemaMode(false);
+  });
+  attachDoubleTapSkip($('#heroCoverFrame'), $('#heroSkipFeedback'));
+  attachDoubleTapSkip($('#sheetCoverStage'), $('#sheetSkipFeedback'));
 
   // Sleep Timer modal
   const openSleepModal = () => { updateSleepUi(); sleepTimerModal.hidden = false; };
@@ -2074,8 +2372,12 @@
     if ($('#voiceNoteLabel')) $('#voiceNoteLabel').textContent = 'Pesan Suara';
   });
 
-  // Equalizer Preset modal
-  const openEqModal = () => { applyEqPreset(eqPreset, { silent: true }); eqModal.hidden = false; };
+  // Equalizer & Playback Mood modal
+  const openEqModal = () => {
+    applyEqPreset(eqPreset, { silent: true });
+    applyPlaybackSpeed(playbackSpeed, { silent: true });
+    eqModal.hidden = false;
+  };
   const closeEqModal = () => { eqModal.hidden = true; };
   $('#eqButton')?.addEventListener('click', openEqModal);
   $('#sheetEqButton')?.addEventListener('click', openEqModal);
@@ -2084,9 +2386,14 @@
   $('#eqOptions')?.addEventListener('click', (e) => {
     const btn = e.target.closest('.eq-option[data-eq]');
     if (!btn) return;
-    ensureAudioGraph();
+    ensureAudioGraph({ force: btn.dataset.eq !== 'normal' });
     applyEqPreset(btn.dataset.eq);
     closeEqModal();
+  });
+  $('#speedOptions')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.speed-pill[data-speed]');
+    if (!btn) return;
+    applyPlaybackSpeed(Number(btn.dataset.speed));
   });
 
   // Tap-to-Sync .lrc Karaoke Creator Studio listeners
@@ -2192,8 +2499,11 @@
   });
   if ('mediaSession' in navigator) {
     const actions = {
-      play: () => tryPlay(), pause: () => smoothPause(150),
-      previoustrack: previousTrack, nexttrack: nextTrack,
+      play: () => tryPlay(),
+      pause: () => smoothPause(150),
+      stop: () => smoothPause(150),
+      previoustrack: previousTrack,
+      nexttrack: nextTrack,
       seekbackward: (details) => changeTime(-(details.seekOffset || 10)),
       seekforward: (details) => changeTime(details.seekOffset || 10),
       seekto: (details) => { if (ready && details.seekTime !== undefined) { audio.currentTime = details.seekTime; progress(); updateMediaPositionState(); } }
@@ -2212,6 +2522,14 @@
     const params = new URLSearchParams(location.search);
     const rawSongParam = params.get('song');
     const normalizedParam = rawSongParam ? rawSongParam.trim().toLowerCase() : '';
+    const isCreatorSync = params.get('sync') === '1';
+    if ($('#syncLrcButton')) $('#syncLrcButton').hidden = !isCreatorSync;
+
+    // Support shared moment timestamp via #t=48 or ?t=48
+    const hashTimeMatch = location.hash.match(/^#t=(\d+)$/i);
+    const queryTimeParam = params.get('t');
+    const sharedSec = hashTimeMatch ? Number(hashTimeMatch[1]) : (queryTimeParam && /^\d+$/.test(queryTimeParam) ? Number(queryTimeParam) : 0);
+
     let index = normalizedParam
       ? tracks.findIndex(track =>
         track.id.toLowerCase() === normalizedParam ||
@@ -2223,15 +2541,20 @@
       const savedIdx = tracks.findIndex((t) => t.id === prefs.lastTrackId);
       if (savedIdx >= 0) {
         index = savedIdx;
-        if (Number.isFinite(prefs.lastTime) && prefs.lastTime > 2) pendingRestoreTime = prefs.lastTime;
+        if (!sharedSec && Number.isFinite(prefs.lastTime) && prefs.lastTime > 2) pendingRestoreTime = prefs.lastTime;
       }
+    }
+    if (sharedSec > 0) {
+      pendingRestoreTime = sharedSec;
+      pendingMomentToast = `Membuka momen di ${timeString(sharedSec)} · ketuk Play untuk mendengarkan ♪`;
     }
     updateRepeatUi();
     updateShuffleUi();
     updateSleepUi();
     applyEqPreset(eqPreset, { silent: true });
+    applyPlaybackSpeed(playbackSpeed, { silent: true });
     switchTrack(index >= 0 ? index : 0, { updateUrl: IS_HTTP || index >= 0 });
-    if (params.get('sync') === '1') {
+    if (isCreatorSync) {
       setTimeout(() => openLrcSyncModal(), 450);
     }
   } else {

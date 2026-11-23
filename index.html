@@ -73,11 +73,12 @@
         lagu ini yang bercerita.</p>
       <div class="cover-stage">
         <div class="cover-halo" aria-hidden="true"></div>
-        <div class="cover-frame">
+        <div class="cover-frame" id="heroCoverFrame">
           <img class="cover-image" id="heroCover" src="assets/cover.webp" width="1254" height="1254"
             alt="Cover lagu Untukmu Syifa dengan potret perempuan berhijab dalam cahaya navy dan merah, dan tipografi putih"
             fetchpriority="high" />
           <span class="cover-shine" aria-hidden="true"></span>
+          <span class="skip-feedback" id="heroSkipFeedback" aria-hidden="true"></span>
         </div>
         <span class="cover-spark cover-spark-a" aria-hidden="true">✧</span>
         <span class="cover-spark cover-spark-b" aria-hidden="true">✦</span>
@@ -180,7 +181,7 @@
         <div class="lyrics-card-bottom">
           <span id="lyricsTip">↕ Scroll untuk membaca lirik</span>
           <div class="lyrics-bottom-right">
-            <button id="syncLrcButton" class="sync-trigger-btn" type="button" title="Buat timestamp karaoke .lrc dengan Tap-to-Sync">♪ Sync .lrc</button>
+            <button id="syncLrcButton" class="sync-trigger-btn" type="button" hidden title="Buat timestamp karaoke .lrc dengan Tap-to-Sync">♪ Sync .lrc</button>
             <span class="original-mark"><span id="lyricsTrackTitle">UNTUKMU SYIFA</span> · LYRICS</span>
           </div>
         </div>
@@ -189,6 +190,12 @@
         <span class="dedication-symbol">♡</span>
         <p>Untuk semua perjalanan yang belum kita mulai, dan cerita yang semoga suatu hari bisa kita tulis bersama.</p>
         <span class="dedication-sign">— Zandevaa</span>
+        <div class="dedication-actions">
+          <button class="story-reply-btn" id="replyWaButton" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-12.5 7.5L3 20.5l1.6-5.2A8.5 8.5 0 1 1 21 11.5Z" /></svg>
+            <span>Sampaikan kesanmu tentang lagu ini</span>
+          </button>
+        </div>
       </div>
     </section>
   </main>
@@ -248,6 +255,7 @@
         <div class="seek-row">
           <span id="currentTime" class="timecode">0:00</span>
           <div class="seek-control" id="seekControl" style="--progress: 0%">
+            <span class="seek-tooltip" id="seekTooltip" aria-hidden="true">0:00</span>
             <div class="seek-visual" aria-hidden="true">
               <div class="seek-rail">
                 <div class="seek-fill"></div>
@@ -320,7 +328,10 @@
           <button class="np-tab" id="tabLyricsBtn" type="button" role="tab" aria-selected="false" data-np-tab="lyrics">Lirik</button>
         </div>
         <div class="np-topbar-right">
-          <button class="control-icon np-icon-btn eq-button" id="sheetEqButton" type="button" aria-label="Preset Equalizer" title="Equalizer" aria-pressed="false">
+          <button class="control-icon np-icon-btn cinema-button" id="cinemaModeButton" type="button" aria-label="Mode Cinema" title="Mode Cinema / Ambient" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" /></svg>
+          </button>
+          <button class="control-icon np-icon-btn eq-button" id="sheetEqButton" type="button" aria-label="Audio & Mood" title="Audio & Mood" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4" /></svg>
           </button>
           <button class="control-icon np-icon-btn sleep-button" id="sheetSleepButton" type="button" aria-label="Sleep Timer" title="Sleep Timer" aria-pressed="false">
@@ -338,6 +349,7 @@
         <div class="np-art-stage" id="sheetCoverStage">
           <div class="np-art-glow" aria-hidden="true"></div>
           <img class="np-art-image" id="sheetCover" src="assets/cover.webp" alt="" />
+          <span class="skip-feedback" id="sheetSkipFeedback" aria-hidden="true"></span>
         </div>
 
         <canvas class="np-visualizer" id="visualizerCanvas" width="320" height="40" aria-hidden="true"></canvas>
@@ -347,15 +359,22 @@
             <h2 id="sheetTitle">Untukmu Syifa</h2>
             <p id="sheetArtist">Zandevaa</p>
           </div>
-          <button class="control-icon np-icon-btn fav-icon" id="sheetFavoriteButton" type="button" aria-label="Sukai lagu ini" aria-pressed="false" title="Sukai lagu ini">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 20.5s-7.5-4.7-9.3-9C1.3 8.1 3.7 4.8 7.2 4.8c2 0 3.7 1.1 4.8 2.8 1.1-1.7 2.8-2.8 4.8-2.8 3.5 0 5.9 3.3 4.5 6.7-1.8 4.3-9.3 9-9.3 9Z" />
-            </svg>
-          </button>
+          <div class="np-meta-actions">
+            <button class="np-moment-btn" id="shareMomentButton" type="button" title="Bagikan lagu tepat di detik ini">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+              <span id="shareMomentLabel">Momen</span>
+            </button>
+            <button class="control-icon np-icon-btn fav-icon" id="sheetFavoriteButton" type="button" aria-label="Sukai lagu ini" aria-pressed="false" title="Sukai lagu ini">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 20.5s-7.5-4.7-9.3-9C1.3 8.1 3.7 4.8 7.2 4.8c2 0 3.7 1.1 4.8 2.8 1.1-1.7 2.8-2.8 4.8-2.8 3.5 0 5.9 3.3 4.5 6.7-1.8 4.3-9.3 9-9.3 9Z" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div class="np-seek-wrap">
           <div class="seek-control" id="sheetSeekControl" style="--progress: 0%">
+            <span class="seek-tooltip" id="sheetSeekTooltip" aria-hidden="true">0:00</span>
             <div class="seek-visual" aria-hidden="true">
               <div class="seek-rail"><div class="seek-fill"></div></div>
               <div class="seek-thumb"></div>
@@ -492,23 +511,32 @@
     </div>
   </div>
 
-  <!-- Equalizer Presets Modal -->
+  <!-- Equalizer & Playback Mood Modal -->
   <div class="modal-overlay" id="eqModal" hidden>
     <div class="modal-card eq-modal-card" role="dialog" aria-modal="true" aria-labelledby="eqModalTitle">
       <div class="modal-header">
         <div>
-          <h3 id="eqModalTitle">Equalizer Audio</h3>
-          <p id="eqStatusText">Pilih karakter suara sesuai suasana mendengarkan.</p>
+          <h3 id="eqModalTitle">Audio &amp; Mood</h3>
+          <p id="eqStatusText">Pilih karakter suara dan kecepatan putar.</p>
         </div>
         <button class="control-icon" id="closeEqModal" type="button" aria-label="Tutup">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
         </button>
       </div>
+      <div class="speed-section">
+        <span class="story-label">PLAYBACK MOOD / SPEED</span>
+        <div class="speed-options" id="speedOptions">
+          <button type="button" class="speed-pill" data-speed="0.85">0.85× Slowed</button>
+          <button type="button" class="speed-pill" data-speed="0.95">0.95× Chill</button>
+          <button type="button" class="speed-pill active" data-speed="1">1.0× Normal</button>
+          <button type="button" class="speed-pill" data-speed="1.1">1.1× Bright</button>
+        </div>
+      </div>
       <div class="eq-options" id="eqOptions">
-        <button type="button" class="eq-option active" data-eq="normal"><strong>Normal</strong><small>Seimbang & natural</small></button>
-        <button type="button" class="eq-option" data-eq="warm"><strong>Warm Acoustic</strong><small>Hangat & intim</small></button>
+        <button type="button" class="eq-option active" data-eq="normal"><strong>Normal</strong><small>Seimbang &amp; natural</small></button>
+        <button type="button" class="eq-option" data-eq="warm"><strong>Warm Acoustic</strong><small>Hangat &amp; intim</small></button>
         <button type="button" class="eq-option" data-eq="bass"><strong>Bass Boost</strong><small>Dentuman lebih dalam</small></button>
-        <button type="button" class="eq-option" data-eq="vocal"><strong>Vocal Clear</strong><small>Vokal & lirik lebih jernih</small></button>
+        <button type="button" class="eq-option" data-eq="vocal"><strong>Vocal Clear</strong><small>Vokal &amp; lirik lebih jernih</small></button>
         <button type="button" class="eq-option" data-eq="night"><strong>Late Night</strong><small>Lembut untuk malam hari</small></button>
       </div>
     </div>
@@ -552,8 +580,8 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-  <audio id="audio" preload="metadata"></audio>
-  <audio id="voiceNoteAudio" preload="none"></audio>
+  <audio id="audio" preload="auto" playsinline></audio>
+  <audio id="voiceNoteAudio" preload="none" playsinline></audio>
 </body>
 
 </html>
