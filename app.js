@@ -71,6 +71,8 @@
   const lyricCardLinesEl = $('#lyricCardLines');
   const eqModal = $('#eqModal');
   const lrcSyncModal = $('#lrcSyncModal');
+  const welcomeGate = $('#welcomeGate');
+  const shortcutsModal = $('#shortcutsModal');
   const voiceNoteAudio = $('#voiceNoteAudio');
   const installAppButton = $('#installAppButton');
 
@@ -99,6 +101,8 @@
         repeatMode,
         eqPreset,
         playbackSpeed,
+        vinylMode,
+        playlistView,
         volume: targetVolume,
         lastTrackId: currentTrack()?.id || '',
         lastTime: Number.isFinite(audio.currentTime) ? Math.floor(audio.currentTime) : 0
@@ -123,6 +127,15 @@
   let repeatMode = ['off', 'all', 'one'].includes(prefs.repeatMode) ? prefs.repeatMode : 'off';
   let eqPreset = EQ_PRESETS[prefs.eqPreset] ? prefs.eqPreset : 'normal';
   let playbackSpeed = [0.85, 0.95, 1, 1.1].includes(Number(prefs.playbackSpeed)) ? Number(prefs.playbackSpeed) : 1;
+  let vinylMode = Boolean(prefs.vinylMode);
+  let playlistView = 'grid';
+  let ambientMode = 'off'; // 'off' | 'vinyl' | 'rain'
+  let ambientVolume = 0.28;
+  let ambientCtx = null;
+  let ambientSource = null;
+  let ambientGain = null;
+  let mutedBeforeVolume = 0.85;
+  let quotedLineIndex = -1;
   let targetVolume = Number.isFinite(prefs.volume) ? Math.min(1, Math.max(0, prefs.volume)) : Number(volumeBar.value || 0.85);
   let favorites = new Set(Array.isArray(prefs.favorites) ? prefs.favorites : []);
   const playCounts = (prefs.playCounts && typeof prefs.playCounts === 'object') ? { ...prefs.playCounts } : {};
@@ -531,10 +544,20 @@
     const ogImageUrl = resolvePath(track.ogImage || track.cover || 'assets/cover-lagu-kedua.png');
     const description = track.description || 'Sebuah lagu dan cerita yang ditulis sepenuh hati.';
     setTitle(track.title);
+    if ($('#heroChapter')) $('#heroChapter').textContent = (track.chapter || `CHAPTER ${String(activeIndex + 1).padStart(2, '0')}`).toUpperCase();
     $('#heroDate').textContent = track.date || 'A PERSONAL MUSIC STORY';
+    if ($('#heroMood')) {
+      $('#heroMood').textContent = track.mood || 'Personal Story';
+      $('#heroMood').hidden = !track.mood;
+    }
     $('#heroDescription').textContent = description;
     $('#heroCover').src = coverUrl;
     $('#heroCover').alt = `Cover lagu ${track.title}`;
+    if ($('#heroVinylLabel')) $('#heroVinylLabel').src = coverUrl;
+    if ($('#sheetVinylLabel')) $('#sheetVinylLabel').src = coverUrl;
+    if ($('#sheetMood')) {
+      $('#sheetMood').textContent = track.mood || 'Music Stories';
+    }
     $('#heroArtist').textContent = `by ${artist}`;
     $('#heroDedication').textContent = `“${track.dedication || 'Ada cerita di balik setiap lagu.'}”`;
     $('#dedicationTitle').textContent = `— ${track.title}`;
@@ -570,6 +593,9 @@
     applyTrackTheme(track, coverUrl);
     updateFavoriteUi();
     refreshUpcomingTrack();
+    renderChapterTimeline();
+    requestAnimationFrame(syncAllMarquees);
+    hideQuoteQuickBar();
     document.title = fullTitle;
     setMetaContent('meta[name="description"]', description);
     setMetaContent('meta[property="og:title"]', fullTitle);
@@ -593,6 +619,196 @@
         ]
       });
     }
+  }
+
+  function renderChapterTimeline() {
+    const strip = $('#chapterTimeline');
+    if (!strip) return;
+    if (tracks.length <= 1) { strip.hidden = true; return; }
+    strip.hidden = false;
+    const frag = document.createDocumentFragment();
+    tracks.forEach((track, idx) => {
+      if (idx > 0) {
+        const line = document.createElement('span');
+        line.className = 'chapter-connector';
+        line.setAttribute('aria-hidden', 'true');
+        frag.append(line);
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `chapter-pill${idx === activeIndex ? ' active' : ''}`;
+      btn.dataset.chapterIndex = String(idx);
+      btn.setAttribute('aria-current', idx === activeIndex ? 'true' : 'false');
+      const num = document.createElement('span');
+      num.className = 'chapter-pill-num';
+      num.textContent = String(idx + 1).padStart(2, '0');
+      const label = document.createElement('span');
+      label.textContent = track.title;
+      btn.append(num, label);
+      frag.append(btn);
+    });
+    strip.replaceChildren(frag);
+    const activePill = strip.querySelector('.chapter-pill.active');
+    if (activePill && typeof activePill.scrollIntoView === 'function') {
+      activePill.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }
+
+  function applyVinylMode(enabled, { silent = false } = {}) {
+    vinylMode = Boolean(enabled);
+    document.body.classList.toggle('vinyl-mode', vinylMode);
+    for (const btn of [$('#vinylToggleBtn'), $('#sheetVinylButton')]) {
+      if (!btn) continue;
+      btn.setAttribute('aria-pressed', String(vinylMode));
+      btn.title = vinylMode ? 'Kembali ke tampilan Cover' : 'Aktifkan Mode Vinyl';
+    }
+    const toggleLabel = $('#vinylToggleBtn span');
+    if (toggleLabel) toggleLabel.textContent = vinylMode ? 'Cover' : 'Vinyl';
+    savePrefs();
+    if (!silent) showToast(vinylMode ? 'Mode Vinyl aktif ◎' : 'Tampilan Cover aktif');
+  }
+
+  function applyPlaylistView(view) {
+    playlistView = view === 'grid' ? 'grid' : 'list';
+    playlistList.classList.toggle('is-grid', playlistView === 'grid');
+    $('#playlistViewListBtn')?.classList.toggle('active', playlistView === 'list');
+    $('#playlistViewListBtn')?.setAttribute('aria-pressed', String(playlistView === 'list'));
+    $('#playlistViewGridBtn')?.classList.toggle('active', playlistView === 'grid');
+    $('#playlistViewGridBtn')?.setAttribute('aria-pressed', String(playlistView === 'grid'));
+    savePrefs();
+  }
+
+  // ─── Independent Procedural Ambient Sound (Vinyl Crackle & Soft Rain) ───
+  // Kept in its own AudioContext so native <audio> background playback on mobile is NEVER affected.
+  function stopAmbientSound() {
+    if (ambientSource) {
+      try { ambientSource.stop(); ambientSource.disconnect(); } catch (_e) { /* Ignore. */ }
+      ambientSource = null;
+    }
+    if (ambientCtx && ambientCtx.state === 'running') {
+      ambientCtx.suspend().catch(() => { /* Ignore. */ });
+    }
+  }
+
+  function startAmbientSound(mode) {
+    if (mode === 'off') { stopAmbientSound(); return; }
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    try {
+      if (!ambientCtx) {
+        ambientCtx = new AudioCtx();
+        ambientGain = ambientCtx.createGain();
+        ambientGain.connect(ambientCtx.destination);
+      }
+      if (ambientCtx.state === 'suspended') ambientCtx.resume().catch(() => { /* Ignore. */ });
+      if (ambientSource) {
+        try { ambientSource.stop(); ambientSource.disconnect(); } catch (_e) { /* Ignore. */ }
+      }
+      const sr = ambientCtx.sampleRate;
+      const len = sr * 4;
+      const buffer = ambientCtx.createBuffer(1, len, sr);
+      const out = buffer.getChannelData(0);
+
+      if (mode === 'vinyl') {
+        let last = 0;
+        for (let i = 0; i < len; i++) {
+          const white = Math.random() * 2 - 1;
+          last = (last + 0.03 * white) / 1.03;
+          let crackle = 0;
+          if (Math.random() < 0.00055) crackle = (Math.random() * 2 - 1) * 0.42;
+          else if (Math.random() < 0.003) crackle = (Math.random() * 2 - 1) * 0.11;
+          out[i] = last * 0.28 + crackle;
+        }
+      } else {
+        // Soft night rain (pink-ish filtered noise)
+        let b0 = 0, b1 = 0, b2 = 0;
+        for (let i = 0; i < len; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.997 * b0 + white * 0.029;
+          b1 = 0.985 * b1 + white * 0.032;
+          b2 = 0.950 * b2 + white * 0.048;
+          out[i] = (b0 + b1 + b2 + white * 0.015) * 0.45;
+        }
+      }
+
+      const src = ambientCtx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+
+      const filter = ambientCtx.createBiquadFilter();
+      filter.type = mode === 'vinyl' ? 'bandpass' : 'lowpass';
+      filter.frequency.value = mode === 'vinyl' ? 1400 : 950;
+      filter.Q.value = mode === 'vinyl' ? 0.55 : 0.7;
+
+      src.connect(filter);
+      filter.connect(ambientGain);
+      ambientGain.gain.setValueAtTime(ambientVolume * (mode === 'vinyl' ? 0.55 : 0.45), ambientCtx.currentTime);
+      src.start();
+      ambientSource = src;
+    } catch (_e) {
+      stopAmbientSound();
+    }
+  }
+
+  function setAmbientMode(mode, { silent = false } = {}) {
+    ambientMode = ['off', 'vinyl', 'rain'].includes(mode) ? mode : 'off';
+    eqModal?.querySelectorAll('#ambientOptions .speed-pill').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.ambient === ambientMode);
+    });
+    if ($('#ambientVolRow')) $('#ambientVolRow').hidden = ambientMode === 'off';
+    if (ambientMode === 'off') {
+      stopAmbientSound();
+    } else if (!audio.paused) {
+      startAmbientSound(ambientMode);
+    }
+    if (!silent) {
+      const labels = { off: 'Atmosfer dimatikan', vinyl: 'Atmosfer: Vinyl Crackle ◎', rain: 'Atmosfer: Soft Rain 🌧' };
+      showToast(labels[ambientMode]);
+    }
+  }
+
+  function showWelcomeGateForTrack(track) {
+    if (!welcomeGate || !track) return;
+    if ($('#welcomeCover')) $('#welcomeCover').src = resolvePath(track.cover || 'assets/cover.webp');
+    if ($('#welcomeTitle')) $('#welcomeTitle').textContent = track.title;
+    if ($('#welcomeNote')) $('#welcomeNote').textContent = `“${track.dedication || track.description || 'Ada lagu dan cerita kecil untukmu.'}”`;
+    welcomeGate.hidden = false;
+    welcomeGate.classList.remove('is-leaving');
+  }
+
+  function dismissWelcomeGate({ autoplay = false } = {}) {
+    if (!welcomeGate || welcomeGate.hidden) return;
+    try { sessionStorage.setItem('zandevaa_opened', '1'); } catch (_e) { /* Ignore. */ }
+    welcomeGate.classList.add('is-leaving');
+    setTimeout(() => { welcomeGate.hidden = true; welcomeGate.classList.remove('is-leaving'); }, 340);
+    if (autoplay) tryPlay();
+  }
+
+  function syncMarquee(wrapEl, textEl) {
+    if (!wrapEl || !textEl) return;
+    wrapEl.classList.remove('is-marquee');
+    wrapEl.style.removeProperty('--marquee-shift');
+    wrapEl.style.removeProperty('--marquee-duration');
+    const overflow = Math.ceil(textEl.scrollWidth - wrapEl.clientWidth);
+    if (overflow > 6) {
+      const shift = overflow + 18;
+      const duration = clamp(shift / 24 + 4.5, 6, 16);
+      wrapEl.style.setProperty('--marquee-shift', `-${shift}px`);
+      wrapEl.style.setProperty('--marquee-duration', `${duration.toFixed(1)}s`);
+      wrapEl.classList.add('is-marquee');
+    }
+  }
+
+  function syncAllMarquees() {
+    syncMarquee($('#dockTitleWrap'), $('#playerTitle'));
+    if (isSheetOpen) syncMarquee($('#sheetTitleWrap'), $('#sheetTitle'));
+  }
+
+  function hideQuoteQuickBar() {
+    quotedLineIndex = -1;
+    if ($('#quoteQuickBar')) $('#quoteQuickBar').hidden = true;
+    lyricsContent.querySelectorAll('.lyric-line.quote-selected').forEach((el) => el.classList.remove('quote-selected'));
+    sheetLyricsContent?.querySelectorAll('.lyric-line.quote-selected').forEach((el) => el.classList.remove('quote-selected'));
   }
 
   function getMostPlayedTrackId() {
@@ -637,6 +853,8 @@
       button.dataset.trackIndex = String(index);
       button.setAttribute('aria-pressed', String(selected));
       button.setAttribute('aria-label', `Pilih ${track.title}, ${track.artist || 'Zandevaa'}`);
+      const thumbWrap = document.createElement('span');
+      thumbWrap.className = 'playlist-thumb-wrap';
       const number = document.createElement('span');
       number.className = 'playlist-number';
       number.textContent = String(index + 1).padStart(2, '0');
@@ -663,7 +881,7 @@
         title.append(topBadge);
       }
       const artist = document.createElement('small');
-      artist.textContent = track.artist || 'Zandevaa';
+      artist.textContent = track.mood ? `${track.artist || 'Zandevaa'} · ${track.mood}` : (track.artist || 'Zandevaa');
       details.append(title, artist);
       const dur = document.createElement('span');
       dur.className = 'playlist-duration';
@@ -675,7 +893,8 @@
       if (selected && !audio.paused && !audio.ended && !audio.error) {
         button.classList.add('currently-playing');
       }
-      button.append(number, image, details, dur, icon);
+      thumbWrap.append(number, image, dur, icon);
+      button.append(thumbWrap, details);
       list.append(button);
     });
     playlistList.replaceChildren(list);
@@ -694,8 +913,10 @@
     if (playing) {
       trackState.textContent = 'NOW PLAYING';
       startVisualizerLoop();
+      if (ambientMode !== 'off') startAmbientSound(ambientMode);
     } else {
       stopVisualizerLoop();
+      if (ambientMode !== 'off') stopAmbientSound();
       if (audioFailed) trackState.textContent = 'MP3 BELUM TERSEDIA';
       else if (ready) trackState.textContent = 'READY TO PLAY';
       else trackState.textContent = 'LOADING AUDIO';
@@ -808,9 +1029,14 @@
     savePrefs();
   }
 
+  function isVisualizerVisible() {
+    if (document.hidden || !isSheetOpen) return false;
+    return activeSheetTab === 'player' || window.innerWidth >= 900;
+  }
+
   function startVisualizerLoop() {
-    // Only animate canvas when Now Playing player tab is actively visible (zero mobile background drain!)
-    if (visualizerRaf || document.hidden || !isSheetOpen || activeSheetTab !== 'player') return;
+    // Only animate canvas when Now Playing player panel is actively visible (zero mobile background drain!)
+    if (visualizerRaf || !isVisualizerVisible()) return;
     const ctx = visualizerCanvas?.getContext('2d');
     if (!ctx) return;
     const barCount = 34;
@@ -819,7 +1045,7 @@
     const frameInterval = IS_MOBILE ? 42 : 25; // ~24fps on mobile, ~40fps on desktop
 
     const draw = (now) => {
-      if (document.hidden || !isSheetOpen || activeSheetTab !== 'player' || audio.paused || audio.ended) {
+      if (!isVisualizerVisible() || audio.paused || audio.ended) {
         stopVisualizerLoop();
         return;
       }
@@ -1069,6 +1295,7 @@
 
   function buildLyricsFragment(sections, targetList) {
     const fragment = document.createDocumentFragment();
+    let globalIdx = 0;
     for (const section of sections) {
       const wrapper = document.createElement('section');
       wrapper.className = 'lyric-group';
@@ -1080,6 +1307,7 @@
         const line = document.createElement('span');
         line.className = 'lyric-line';
         line.textContent = text;
+        line.dataset.lineIndex = String(globalIdx++);
         targetList.push({ element: line, text, time: null });
         wrapper.append(line);
       }
@@ -1510,11 +1738,11 @@
     $('#tabLyricsBtn').setAttribute('aria-selected', String(isLyrics));
     if (isLyrics) {
       setCinemaMode(false);
-      stopVisualizerLoop();
+      if (!isVisualizerVisible()) stopVisualizerLoop();
       if (lastActiveLine >= 0) {
         requestAnimationFrame(() => centerLyric(sheetLyricLines[lastActiveLine]?.element, sheetLyricsScroll));
       }
-    } else if (!audio.paused && isSheetOpen) {
+    } else if (!audio.paused && isVisualizerVisible()) {
       startVisualizerLoop();
     }
   }
@@ -1527,8 +1755,11 @@
     nowPlayingSheet.hidden = false;
     nowPlayingSheet.setAttribute('aria-hidden', 'false');
     document.body.classList.add('sheet-open');
-    requestAnimationFrame(() => nowPlayingSheet.classList.add('is-open'));
-    if (!audio.paused && activeSheetTab === 'player') startVisualizerLoop();
+    requestAnimationFrame(() => {
+      nowPlayingSheet.classList.add('is-open');
+      syncAllMarquees();
+    });
+    if (!audio.paused && isVisualizerVisible()) startVisualizerLoop();
     else stopVisualizerLoop();
   }
 
@@ -1783,15 +2014,19 @@
     ctx.fillText('✧  zandevaa / Music Stories', cardX + innerPad, footerY);
   }
 
-  async function openLyricCardModal() {
+  async function openLyricCardModal(startAtIndex = -1) {
     const track = currentTrack();
     if (!track) return;
     const allLines = getSelectableLines();
     selectedCardLineIndices = [];
     if (allLines.length) {
-      const chorusStart = allLines.findIndex((l) => /chorus|reff/i.test(l.section));
-      const start = chorusStart >= 0 ? chorusStart : 0;
-      for (let i = start; i < Math.min(allLines.length, start + 3); i++) selectedCardLineIndices.push(i);
+      let start = startAtIndex >= 0 && startAtIndex < allLines.length ? startAtIndex : -1;
+      if (start < 0) {
+        const chorusStart = allLines.findIndex((l) => /chorus|reff/i.test(l.section));
+        start = chorusStart >= 0 ? chorusStart : 0;
+      }
+      const count = startAtIndex >= 0 ? 2 : 3;
+      for (let i = start; i < Math.min(allLines.length, start + count); i++) selectedCardLineIndices.push(i);
     }
 
     const renderLineButtons = () => {
@@ -2059,7 +2294,7 @@
       if (audioGraphReady && audioCtx && audioCtx.state === 'suspended' && !audio.paused) {
         audioCtx.resume().catch(() => { /* Ignore. */ });
       }
-      if (!audio.paused && isSheetOpen && activeSheetTab === 'player') {
+      if (!audio.paused && isVisualizerVisible()) {
         startVisualizerLoop();
       }
       updateMediaPositionState();
@@ -2220,8 +2455,8 @@
   $('#copyLyricsButton')?.addEventListener('click', copyFullLyrics);
   $('#sheetCopyLyricsButton')?.addEventListener('click', copyFullLyrics);
   $('#focusLyricsButton')?.addEventListener('click', () => openNowPlayingSheet('lyrics'));
-  $('#lyricCardButton')?.addEventListener('click', openLyricCardModal);
-  $('#sheetLyricCardButton')?.addEventListener('click', openLyricCardModal);
+  $('#lyricCardButton')?.addEventListener('click', () => openLyricCardModal(-1));
+  $('#sheetLyricCardButton')?.addEventListener('click', () => openLyricCardModal(-1));
   $('#topLyrics').addEventListener('click', () => {
     followLyrics = false;
     updateFollowButton();
@@ -2234,16 +2469,66 @@
   });
 
   const handleLyricLineClick = (event) => {
-    const line = event.target.closest('.lyric-line[data-time]');
-    if (!line || audioFailed) return;
-    audio.currentTime = Number(line.dataset.time);
-    followLyrics = true;
-    updateFollowButton();
-    progress();
-    updateMediaPositionState();
+    const timed = event.target.closest('.lyric-line[data-time]');
+    if (timed && !audioFailed) {
+      audio.currentTime = Number(timed.dataset.time);
+      followLyrics = true;
+      updateFollowButton();
+      progress();
+      updateMediaPositionState();
+      return;
+    }
+    const line = event.target.closest('.lyric-line[data-line-index]');
+    if (!line) return;
+    const idx = Number(line.dataset.lineIndex);
+    if (!Number.isFinite(idx)) return;
+    if (quotedLineIndex === idx) {
+      hideQuoteQuickBar();
+      return;
+    }
+    hideQuoteQuickBar();
+    quotedLineIndex = idx;
+    line.classList.add('quote-selected');
+    if (event.currentTarget === sheetLyricsContent) {
+      openLyricCardModal(idx);
+      hideQuoteQuickBar();
+      return;
+    }
+    if ($('#quoteQuickPreview')) $('#quoteQuickPreview').textContent = `“${line.textContent}”`;
+    if ($('#quoteQuickBar')) $('#quoteQuickBar').hidden = false;
   };
   lyricsContent.addEventListener('click', handleLyricLineClick);
   sheetLyricsContent?.addEventListener('click', handleLyricLineClick);
+
+  $('#quoteMakeCardBtn')?.addEventListener('click', () => {
+    const idx = quotedLineIndex;
+    hideQuoteQuickBar();
+    openLyricCardModal(idx);
+  });
+  $('#quoteQuickClose')?.addEventListener('click', hideQuoteQuickBar);
+
+  // Chapter Timeline click
+  $('#chapterTimeline')?.addEventListener('click', (event) => {
+    const pill = event.target.closest('.chapter-pill[data-chapter-index]');
+    if (!pill) return;
+    const idx = Number(pill.dataset.chapterIndex);
+    if (idx === activeIndex) { togglePlay(); return; }
+    switchTrack(idx, { autoplay: true, animate: true });
+  });
+
+  // Vinyl Mode toggles
+  const handleVinylToggle = () => {
+    triggerHaptic(10);
+    applyVinylMode(!vinylMode);
+  };
+  $('#vinylToggleBtn')?.addEventListener('click', handleVinylToggle);
+  $('#sheetVinylButton')?.addEventListener('click', handleVinylToggle);
+
+  let resizeMarqueeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeMarqueeTimer);
+    resizeMarqueeTimer = setTimeout(syncAllMarquees, 180);
+  });
 
   ['wheel', 'touchstart', 'pointerdown', 'keydown'].forEach(type => {
     lyricsScroll.addEventListener(type, (event) => {
@@ -2395,6 +2680,43 @@
     if (!btn) return;
     applyPlaybackSpeed(Number(btn.dataset.speed));
   });
+  $('#ambientOptions')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.speed-pill[data-ambient]');
+    if (!btn) return;
+    setAmbientMode(btn.dataset.ambient);
+  });
+  $('#ambientVolumeBar')?.addEventListener('input', (e) => {
+    ambientVolume = clamp(Number(e.target.value), 0.05, 0.7);
+    if (ambientGain && ambientCtx && ambientMode !== 'off') {
+      ambientGain.gain.setTargetAtTime(ambientVolume * (ambientMode === 'vinyl' ? 0.55 : 0.45), ambientCtx.currentTime, 0.04);
+    }
+  });
+
+  // Playlist Discography Grid / List view toggle & Horizontal Scroll Arrows
+  $('#playlistViewListBtn')?.addEventListener('click', () => applyPlaylistView('list'));
+  $('#playlistViewGridBtn')?.addEventListener('click', () => applyPlaylistView('grid'));
+  $('#playlistScrollPrev')?.addEventListener('click', () => {
+    const step = Math.max(240, playlistList.clientWidth * 0.72);
+    playlistList.scrollBy({ left: -step, behavior: 'smooth' });
+  });
+  $('#playlistScrollNext')?.addEventListener('click', () => {
+    const step = Math.max(240, playlistList.clientWidth * 0.72);
+    playlistList.scrollBy({ left: step, behavior: 'smooth' });
+  });
+
+  // Open Letter Welcome Gate
+  $('#welcomePlayBtn')?.addEventListener('click', () => {
+    triggerHaptic(12);
+    dismissWelcomeGate({ autoplay: true });
+  });
+  $('#welcomeSkipBtn')?.addEventListener('click', () => dismissWelcomeGate({ autoplay: false }));
+
+  // Desktop Keyboard Shortcuts Modal
+  const openShortcutsModal = () => { if (shortcutsModal) shortcutsModal.hidden = false; };
+  const closeShortcutsModal = () => { if (shortcutsModal) shortcutsModal.hidden = true; };
+  $('#shortcutsHintBtn')?.addEventListener('click', openShortcutsModal);
+  $('#closeShortcutsModal')?.addEventListener('click', closeShortcutsModal);
+  shortcutsModal?.addEventListener('click', (e) => { if (e.target === shortcutsModal) closeShortcutsModal(); });
 
   // Tap-to-Sync .lrc Karaoke Creator Studio listeners
   $('#syncLrcButton')?.addEventListener('click', openLrcSyncModal);
@@ -2480,6 +2802,8 @@
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      if (welcomeGate && !welcomeGate.hidden) { dismissWelcomeGate({ autoplay: false }); return; }
+      if (shortcutsModal && !shortcutsModal.hidden) { closeShortcutsModal(); return; }
       if (!lrcSyncModal.hidden) { closeLrcSyncModal(); return; }
       if (!eqModal.hidden) { closeEqModal(); return; }
       if (!lyricCardModal.hidden) { closeLyricCard(); return; }
@@ -2493,9 +2817,35 @@
     }
     const focus = document.activeElement;
     if (['INPUT', 'BUTTON', 'TEXTAREA', 'SELECT'].includes(focus?.tagName) || focus === lyricsScroll || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === '?') {
+      event.preventDefault();
+      if (shortcutsModal?.hidden) openShortcutsModal();
+      else closeShortcutsModal();
+      return;
+    }
     if (event.code === 'Space') { event.preventDefault(); togglePlay(); }
-    if (event.code === 'ArrowRight') changeTime(10);
-    if (event.code === 'ArrowLeft') changeTime(-10);
+    else if (event.code === 'ArrowRight') changeTime(10);
+    else if (event.code === 'ArrowLeft') changeTime(-10);
+    else if (event.key === 'n' || event.key === 'N') nextTrack();
+    else if (event.key === 'p' || event.key === 'P') previousTrack();
+    else if (event.key === 'v' || event.key === 'V') applyVinylMode(!vinylMode);
+    else if (event.key === 'f' || event.key === 'F') toggleFavorite();
+    else if (event.key === 'l' || event.key === 'L') {
+      if (isSheetOpen) closeNowPlayingSheet();
+      else openNowPlayingSheet('player');
+    } else if (event.key === 'm' || event.key === 'M') {
+      if (targetVolume > 0.01) {
+        mutedBeforeVolume = targetVolume;
+        volumeBar.value = '0';
+        setOutputVolume(0);
+        showToast('Audio dibisukan');
+      } else {
+        const restore = mutedBeforeVolume > 0.05 ? mutedBeforeVolume : 0.85;
+        volumeBar.value = String(restore);
+        setOutputVolume(restore);
+        showToast('Audio disuarakan');
+      }
+    }
   });
   if ('mediaSession' in navigator) {
     const actions = {
@@ -2553,9 +2903,17 @@
     updateSleepUi();
     applyEqPreset(eqPreset, { silent: true });
     applyPlaybackSpeed(playbackSpeed, { silent: true });
+    applyVinylMode(vinylMode, { silent: true });
+    applyPlaylistView(playlistView);
     switchTrack(index >= 0 ? index : 0, { updateUrl: IS_HTTP || index >= 0 });
     if (isCreatorSync) {
       setTimeout(() => openLrcSyncModal(), 450);
+    } else {
+      let alreadyOpened = false;
+      try { alreadyOpened = sessionStorage.getItem('zandevaa_opened') === '1'; } catch (_e) { alreadyOpened = false; }
+      if (params.get('open') === '1' || !alreadyOpened) {
+        showWelcomeGateForTrack(currentTrack());
+      }
     }
   } else {
     setLyricsMessage('Belum ada lagu. Tambahkan daftar lagu di playlist.js.');

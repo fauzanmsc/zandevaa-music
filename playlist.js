@@ -7,6 +7,8 @@
 window.PLAYLIST_TRACKS = [
   {
     id: 'untukmu-syifa',
+    chapter: 'Chapter 01',
+    mood: 'Midnight Ballad',
     title: 'Untukmu Syifa',
     artist: 'Zandevaa',
     duration: '5:23',
@@ -22,6 +24,8 @@ window.PLAYLIST_TRACKS = [
   },
   {
     id: 'S-Y-I-F-A',
+    chapter: 'Chapter 02',
+    mood: 'Dreamy Pop',
     title: 'S-Y-I-F-A (Always-on-My-Mind)',
     artist: 'Zandevaa',
     duration: '3:01',
@@ -37,6 +41,8 @@ window.PLAYLIST_TRACKS = [
   },
   {
     id: 'you',
+    chapter: 'Chapter 03',
+    mood: 'Warm Morning',
     title: 'You!',
     artist: 'Zandevaa',
     duration: '2:43',

@@ -39,6 +39,7 @@
 </head>
 
 <body>
+  <div class="film-grain" aria-hidden="true"></div>
   <div class="page-glow glow-a" aria-hidden="true"></div>
   <div class="page-glow glow-b" aria-hidden="true"></div>
   <div class="starfield" aria-hidden="true">✦ <span>✧</span> ✧ <span>✦</span></div>
@@ -64,15 +65,31 @@
     </div>
   </header>
 
+  <nav class="chapter-strip container" id="chapterTimeline" aria-label="Bab cerita musik"></nav>
+
   <main id="awal" class="container page-layout">
     <section class="cover-section" aria-labelledby="pageTitle">
-      <div class="eyebrow"><span class="eyebrow-dot"></span> A COLLECTION OF LOVE SONGS <span
-          class="eyebrow-sep">/</span> <span id="heroDate">18.11.2026</span></div>
+      <div class="eyebrow"><span class="eyebrow-dot"></span> <span id="heroChapter">CHAPTER 01</span> <span
+          class="eyebrow-sep">/</span> <span id="heroDate">18.11.2026</span> <span class="mood-pill" id="heroMood">Midnight Ballad</span></div>
       <h1 class="hero-title" id="pageTitle">Untukmu <em>Syifa.</em></h1>
       <p class="hero-description" id="heroDescription">Ada perasaan yang tak selalu pandai menjadi kata. Jadi, biarkan
         lagu ini yang bercerita.</p>
-      <div class="cover-stage">
+      <div class="cover-stage" id="heroCoverStage">
         <div class="cover-halo" aria-hidden="true"></div>
+        <div class="vinyl-disc" aria-hidden="true">
+          <div class="vinyl-spin">
+            <img class="vinyl-label-img" id="heroVinylLabel" src="assets/cover.webp" alt="" />
+            <span class="vinyl-spindle"></span>
+          </div>
+        </div>
+        <div class="vinyl-tonearm" aria-hidden="true">
+          <svg viewBox="0 0 64 130" fill="none">
+            <circle cx="44" cy="20" r="11" fill="currentColor" fill-opacity="0.16" stroke="currentColor" stroke-width="2" />
+            <circle cx="44" cy="20" r="4" fill="currentColor" />
+            <path d="M44 24 L37 86 L24 109" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+            <rect x="17" y="105" width="11" height="16" rx="3" transform="rotate(28 22 113)" fill="currentColor" />
+          </svg>
+        </div>
         <div class="cover-frame" id="heroCoverFrame">
           <img class="cover-image" id="heroCover" src="assets/cover.webp" width="1254" height="1254"
             alt="Cover lagu Untukmu Syifa dengan potret perempuan berhijab dalam cahaya navy dan merah, dan tipografi putih"
@@ -80,6 +97,10 @@
           <span class="cover-shine" aria-hidden="true"></span>
           <span class="skip-feedback" id="heroSkipFeedback" aria-hidden="true"></span>
         </div>
+        <button class="vinyl-toggle-pill" id="vinylToggleBtn" type="button" aria-pressed="false" title="Ubah tampilan Cover / Vinyl">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3" /></svg>
+          <span>Vinyl</span>
+        </button>
         <span class="cover-spark cover-spark-a" aria-hidden="true">✧</span>
         <span class="cover-spark cover-spark-b" aria-hidden="true">✦</span>
       </div>
@@ -109,28 +130,6 @@
           <p class="story-text" id="heroStory"></p>
         </div>
       </div>
-
-      <section class="playlist-panel" aria-labelledby="playlistHeading">
-        <div class="playlist-heading-row">
-          <div>
-            <div class="eyebrow playlist-eyebrow"><span class="eyebrow-dot"></span> YOUR MUSIC COLLECTION</div>
-            <h2 id="playlistHeading">Playlist <em>untukmu.</em></h2>
-          </div>
-          <span class="playlist-count" id="playlistCount">03 LAGU</span>
-        </div>
-        <p class="playlist-subtitle">Pilih satu lagu. Cover, judul, audio, dan lirik akan berganti otomatis.</p>
-        <div class="playlist-controls">
-          <div class="playlist-filter-group" role="tablist" aria-label="Filter playlist">
-            <button type="button" class="filter-pill active" id="filterAllBtn" data-filter="all" role="tab" aria-selected="true">Semua</button>
-            <button type="button" class="filter-pill" id="filterFavBtn" data-filter="favorites" role="tab" aria-selected="false">Favorit ♥ <span id="favCountBadge">0</span></button>
-          </div>
-          <label class="playlist-search-wrap">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
-            <input id="playlistSearch" type="search" placeholder="Cari lagu…" autocomplete="off" aria-label="Cari lagu dalam playlist" />
-          </label>
-        </div>
-        <div class="playlist-list" id="playlistList" aria-label="Daftar lagu"></div>
-      </section>
     </section>
 
     <section class="lyrics-section" aria-labelledby="lyricsHeading">
@@ -178,6 +177,13 @@
           <div id="lyricsContent" class="lyrics-content"></div>
           <div class="lyrics-end" aria-hidden="true">✧</div>
         </div>
+        <div class="quote-quick-bar" id="quoteQuickBar" hidden>
+          <span class="quote-quick-preview" id="quoteQuickPreview"></span>
+          <div class="quote-quick-actions">
+            <button type="button" class="quote-quick-btn" id="quoteMakeCardBtn">✦ Jadikan Kartu Story</button>
+            <button type="button" class="quote-quick-close" id="quoteQuickClose" aria-label="Tutup">×</button>
+          </div>
+        </div>
         <div class="lyrics-card-bottom">
           <span id="lyricsTip">↕ Scroll untuk membaca lirik</span>
           <div class="lyrics-bottom-right">
@@ -198,11 +204,54 @@
         </div>
       </div>
     </section>
+
+    <section class="playlist-panel" aria-labelledby="playlistHeading">
+      <div class="playlist-heading-row">
+        <div>
+          <div class="eyebrow playlist-eyebrow"><span class="eyebrow-dot"></span> YOUR MUSIC COLLECTION</div>
+          <h2 id="playlistHeading">Playlist <em>untukmu.</em></h2>
+        </div>
+        <div class="playlist-heading-right">
+          <div class="playlist-scroll-arrows" aria-label="Geser playlist horizontal">
+            <button type="button" class="control-icon playlist-arrow-btn" id="playlistScrollPrev" aria-label="Geser ke kiri" title="Geser kiri">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+            </button>
+            <button type="button" class="control-icon playlist-arrow-btn" id="playlistScrollNext" aria-label="Geser ke kanan" title="Geser kanan">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+          </div>
+          <span class="playlist-count" id="playlistCount">03 LAGU</span>
+        </div>
+      </div>
+      <p class="playlist-subtitle">Pilih satu lagu. Cover, judul, audio, dan lirik akan berganti otomatis.</p>
+      <div class="playlist-controls">
+        <div class="playlist-filter-group" role="tablist" aria-label="Filter playlist">
+          <button type="button" class="filter-pill active" id="filterAllBtn" data-filter="all" role="tab" aria-selected="true">Semua</button>
+          <button type="button" class="filter-pill" id="filterFavBtn" data-filter="favorites" role="tab" aria-selected="false">Favorit ♥ <span id="favCountBadge">0</span></button>
+        </div>
+        <label class="playlist-search-wrap">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+          <input id="playlistSearch" type="search" placeholder="Cari lagu…" autocomplete="off" aria-label="Cari lagu dalam playlist" />
+        </label>
+        <div class="playlist-view-toggle" role="group" aria-label="Mode tampilan playlist">
+          <button type="button" class="view-btn" id="playlistViewListBtn" data-view="list" aria-pressed="false" title="Tampilan Daftar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
+          </button>
+          <button type="button" class="view-btn active" id="playlistViewGridBtn" data-view="grid" aria-pressed="true" title="Tampilan Galeri Cover">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
+          </button>
+        </div>
+      </div>
+      <div class="playlist-list is-grid" id="playlistList" aria-label="Daftar lagu"></div>
+    </section>
   </main>
 
   <footer class="site-footer container">
     <span>MADE WITH <span class="footer-heart">♥</span> FOR SYIFA</span>
-    <span>© 2026 Zandevaa. A personal music story.</span>
+    <div class="footer-right">
+      <button type="button" class="shortcuts-hint-btn" id="shortcutsHintBtn" title="Shortcut keyboard (?)">Pintasan <code>?</code></button>
+      <span>© 2026 Zandevaa. A personal music story.</span>
+    </div>
   </footer>
 
   <aside class="music-dock" id="musicDock" aria-label="Pemutar musik playlist Zandevaa">
@@ -213,7 +262,7 @@
         <div class="track-details">
           <span class="now-label"><span class="now-wave" aria-hidden="true"><i></i><i></i><i></i></span> <span
               id="trackState">YOUR SPECIAL SONG</span></span>
-          <strong id="playerTitle">Untukmu Syifa</strong>
+          <div class="marquee-wrap" id="dockTitleWrap"><strong id="playerTitle" class="marquee-text">Untukmu Syifa</strong></div>
           <span class="track-artist" id="playerArtist">Zandevaa</span>
         </div>
       </div>
@@ -328,6 +377,9 @@
           <button class="np-tab" id="tabLyricsBtn" type="button" role="tab" aria-selected="false" data-np-tab="lyrics">Lirik</button>
         </div>
         <div class="np-topbar-right">
+          <button class="control-icon np-icon-btn vinyl-icon-btn" id="sheetVinylButton" type="button" aria-label="Mode Vinyl" title="Mode Vinyl" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3" /></svg>
+          </button>
           <button class="control-icon np-icon-btn cinema-button" id="cinemaModeButton" type="button" aria-label="Mode Cinema" title="Mode Cinema / Ambient" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" /></svg>
           </button>
@@ -344,10 +396,25 @@
         </div>
       </header>
 
+      <div class="np-content-grid">
       <!-- Tab 1: Now Playing Player -->
       <div class="np-panel np-player-panel" id="npPlayerPanel" role="tabpanel" aria-labelledby="tabPlayerBtn">
         <div class="np-art-stage" id="sheetCoverStage">
           <div class="np-art-glow" aria-hidden="true"></div>
+          <div class="vinyl-disc np-vinyl-disc" aria-hidden="true">
+            <div class="vinyl-spin">
+              <img class="vinyl-label-img" id="sheetVinylLabel" src="assets/cover.webp" alt="" />
+              <span class="vinyl-spindle"></span>
+            </div>
+          </div>
+          <div class="vinyl-tonearm np-vinyl-tonearm" aria-hidden="true">
+            <svg viewBox="0 0 64 130" fill="none">
+              <circle cx="44" cy="20" r="11" fill="currentColor" fill-opacity="0.16" stroke="currentColor" stroke-width="2" />
+              <circle cx="44" cy="20" r="4" fill="currentColor" />
+              <path d="M44 24 L37 86 L24 109" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+              <rect x="17" y="105" width="11" height="16" rx="3" transform="rotate(28 22 113)" fill="currentColor" />
+            </svg>
+          </div>
           <img class="np-art-image" id="sheetCover" src="assets/cover.webp" alt="" />
           <span class="skip-feedback" id="sheetSkipFeedback" aria-hidden="true"></span>
         </div>
@@ -356,8 +423,8 @@
 
         <div class="np-meta-row">
           <div class="np-meta-text">
-            <h2 id="sheetTitle">Untukmu Syifa</h2>
-            <p id="sheetArtist">Zandevaa</p>
+            <div class="marquee-wrap" id="sheetTitleWrap"><h2 id="sheetTitle" class="marquee-text">Untukmu Syifa</h2></div>
+            <p><span id="sheetArtist">Zandevaa</span> <span class="sheet-mood-sep">·</span> <span class="sheet-mood" id="sheetMood">Midnight Ballad</span></p>
           </div>
           <div class="np-meta-actions">
             <button class="np-moment-btn" id="shareMomentButton" type="button" title="Bagikan lagu tepat di detik ini">
@@ -451,6 +518,7 @@
           </div>
         </div>
       </div>
+      </div>
     </div>
   </section>
 
@@ -532,6 +600,18 @@
           <button type="button" class="speed-pill" data-speed="1.1">1.1× Bright</button>
         </div>
       </div>
+      <div class="speed-section">
+        <span class="story-label">SUARA ATMOSFER (OPSIONAL)</span>
+        <div class="ambient-options" id="ambientOptions">
+          <button type="button" class="speed-pill active" data-ambient="off">Mati</button>
+          <button type="button" class="speed-pill" data-ambient="vinyl">Vinyl Crackle</button>
+          <button type="button" class="speed-pill" data-ambient="rain">Soft Rain</button>
+        </div>
+        <div class="ambient-vol-row" id="ambientVolRow" hidden>
+          <span>Level atmosfer</span>
+          <input id="ambientVolumeBar" type="range" min="0.05" max="0.7" step="0.05" value="0.28" aria-label="Volume suara atmosfer" />
+        </div>
+      </div>
       <div class="eq-options" id="eqOptions">
         <button type="button" class="eq-option active" data-eq="normal"><strong>Normal</strong><small>Seimbang &amp; natural</small></button>
         <button type="button" class="eq-option" data-eq="warm"><strong>Warm Acoustic</strong><small>Hangat &amp; intim</small></button>
@@ -576,6 +656,48 @@
         <button type="button" class="card-action-secondary" id="syncCopyBtn">Salin .lrc</button>
         <button type="button" class="card-action-primary" id="syncDownloadBtn">Unduh .lrc</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Open Letter First-Visit Gate (Enables 1-Tap Autoplay on Mobile!) -->
+  <div class="welcome-gate" id="welcomeGate" hidden>
+    <div class="welcome-card" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
+      <div class="welcome-art-wrap">
+        <img class="welcome-cover" id="welcomeCover" src="assets/cover.webp" alt="" />
+      </div>
+      <span class="welcome-eyebrow">✦ A PERSONAL MUSIC STORY</span>
+      <h2 class="welcome-title" id="welcomeTitle">Untukmu Syifa</h2>
+      <p class="welcome-note" id="welcomeNote">“Karena hadirmu lebih berharga dari jawabannya.”</p>
+      <button type="button" class="welcome-play-btn" id="welcomePlayBtn">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5.8v12.4c0 .8.9 1.3 1.6.9l9-6.2a1.1 1.1 0 0 0 0-1.8l-9-6.2c-.7-.4-1.6.1-1.6.9Z" /></svg>
+        <span>Buka &amp; Dengarkan</span>
+      </button>
+      <button type="button" class="welcome-skip-btn" id="welcomeSkipBtn">Masuk tanpa memutar</button>
+    </div>
+  </div>
+
+  <!-- Desktop Keyboard Shortcuts Modal -->
+  <div class="modal-overlay" id="shortcutsModal" hidden>
+    <div class="modal-card shortcuts-modal-card" role="dialog" aria-modal="true" aria-labelledby="shortcutsModalTitle">
+      <div class="modal-header">
+        <div>
+          <h3 id="shortcutsModalTitle">Pintasan Keyboard</h3>
+          <p>Kontrol cepat untuk mendengarkan di desktop.</p>
+        </div>
+        <button class="control-icon" id="closeShortcutsModal" type="button" aria-label="Tutup">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <ul class="shortcuts-list">
+        <li><span>Putar / Jeda</span><kbd>Space</kbd></li>
+        <li><span>Mundur / Maju 10 detik</span><span><kbd>←</kbd> <kbd>→</kbd></span></li>
+        <li><span>Lagu Berikutnya / Sebelumnya</span><span><kbd>N</kbd> <kbd>P</kbd></span></li>
+        <li><span>Buka / Tutup Now Playing</span><kbd>L</kbd></li>
+        <li><span>Mode Vinyl / Cover</span><kbd>V</kbd></li>
+        <li><span>Simpan Favorit</span><kbd>F</kbd></li>
+        <li><span>Bisukan / Suarakan</span><kbd>M</kbd></li>
+        <li><span>Tutup Modal / Layar Penuh</span><kbd>Esc</kbd></li>
+      </ul>
     </div>
   </div>
 
