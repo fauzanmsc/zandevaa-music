@@ -1,4 +1,23 @@
 /**
+ * PENGATURAN PERSONAL - EDIT BAGIAN INI SESUAI KEBUTUHAN
+ */
+window.STORY_CONFIG = {
+  recipientName: 'Syifa',
+  whatsappNumber: '', // Opsional: isi nomor WA format internasional tanpa +, mis. '6281234567890'
+  // Passcode disimpan dalam bentuk hash SHA-256 agar tidak terbaca polos di source code.
+  passcodeHash: '5ad9d5d217379dcfd17e72683cc7655b0c1262608f7927296624035d4aabdf42',
+  secretLetter: {
+    eyebrow: '✦ SECRET LETTER · FOUND',
+    title: 'Di balik setiap nada.',
+    paragraphs: [
+      'Kalau kamu menemukan surat kecil ini, terima kasih sudah meluangkan waktu untuk benar-benar mendengarkan setiap lagu dan membaca setiap baitnya.',
+      'Tidak semua perasaan mudah diucapkan langsung. Maka aku menaruhnya di dalam melodi—supaya kapan pun kamu membuka halaman ini, kamu tahu ada seseorang yang pernah menulis cerita ini sepenuh hati untukmu.'
+    ],
+    sign: '— Zandevaa'
+  }
+};
+
+/**
  * DAFTAR LAGU - EDIT FILE INI UNTUK MENAMBAHKAN TRACK
  * Setiap lagu bisa punya audio, cover, lirik, cerita (story), dan voiceNote (opsional) sendiri.
  * audio boleh berupa path lokal (mis. assets/lagu-03.mp3) atau URL HTTPS langsung.

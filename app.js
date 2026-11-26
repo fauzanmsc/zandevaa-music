@@ -73,8 +73,85 @@
   const lrcSyncModal = $('#lrcSyncModal');
   const welcomeGate = $('#welcomeGate');
   const shortcutsModal = $('#shortcutsModal');
+  const passcodeGate = $('#passcodeGate');
+  const passcodeForm = $('#passcodeForm');
+  const passcodeInput = $('#passcodeInput');
+  const passcodeFeedback = $('#passcodeFeedback');
+  const storyTimelineModal = $('#storyTimelineModal');
+  const secretLetterModal = $('#secretLetterModal');
   const voiceNoteAudio = $('#voiceNoteAudio');
   const installAppButton = $('#installAppButton');
+
+  const STORY_CONFIG = (window.STORY_CONFIG && typeof window.STORY_CONFIG === 'object') ? window.STORY_CONFIG : {};
+  const PASSCODE_STORAGE_KEY = 'zandevaa_passcode_unlocked_v1';
+  const PASSCODE_HASH = String(STORY_CONFIG.passcodeHash || '').trim().toLowerCase();
+  const PASSCODE_FALLBACK = STORY_CONFIG.passcode ? String(STORY_CONFIG.passcode) : '';
+  const OFFLINE_AUDIO_CACHE = 'zandevaa-offline-audio-v1';
+
+  // Pure-JS synchronous SHA-256 (works identically on HTTPS, localhost, and file://)
+  function sha256Hex(ascii) {
+    const rightRotate = (value, amount) => (value >>> amount) | (value << (32 - amount));
+    const maxWord = 0x100000000;
+    const words = [];
+    const asciiBitLength = ascii.length * 8;
+    const hash = [];
+    const k = [];
+    let primeCounter = 0;
+    const isComposite = {};
+    for (let candidate = 2; primeCounter < 64; candidate++) {
+      if (!isComposite[candidate]) {
+        for (let i = 0; i < 313; i += candidate) isComposite[i] = candidate;
+        hash[primeCounter] = (Math.pow(candidate, 0.5) * maxWord) | 0;
+        k[primeCounter++] = (Math.pow(candidate, 1 / 3) * maxWord) | 0;
+      }
+    }
+    let msg = ascii + '\x80';
+    while ((msg.length % 64) - 56) msg += '\x00';
+    for (let i = 0; i < msg.length; i++) {
+      const j = msg.charCodeAt(i);
+      words[i >> 2] |= j << (((3 - i) % 4) * 8);
+    }
+    words[words.length] = (asciiBitLength / maxWord) | 0;
+    words[words.length] = asciiBitLength;
+    for (let j = 0; j < words.length;) {
+      const w = words.slice(j, (j += 16));
+      const oldHash = hash.slice(0);
+      for (let i = 0; i < 64; i++) {
+        const w15 = w[i - 15], w2 = w[i - 2];
+        const a = hash[0], e = hash[4];
+        const temp1 = hash[7]
+          + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25))
+          + ((e & hash[5]) ^ (~e & hash[6]))
+          + k[i]
+          + (w[i] = i < 16 ? w[i] : (
+            w[i - 16]
+            + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3))
+            + w[i - 7]
+            + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))
+          ) | 0);
+        const temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22))
+          + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
+        hash.unshift((temp1 + temp2) | 0);
+        hash[4] = (hash[4] + temp1) | 0;
+        hash.pop();
+      }
+      for (let i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+    }
+    let result = '';
+    for (let i = 0; i < 8; i++) {
+      for (let j = 3; j + 1; j--) {
+        const b = (hash[i] >> (j * 8)) & 255;
+        result += (b < 16 ? '0' : '') + b.toString(16);
+      }
+    }
+    return result;
+  }
+
+  function isSiteUnlocked() {
+    try { return localStorage.getItem(PASSCODE_STORAGE_KEY) === 'true'; }
+    catch (_e) { return !document.documentElement.classList.contains('is-locked'); }
+  }
+  let siteUnlocked = isSiteUnlocked();
 
   const EQ_PRESETS = {
     normal: { label: 'Normal', low: 0, mid: 0, high: 0 },
@@ -97,6 +174,8 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         favorites: [...favorites],
         playCounts,
+        savedMoments,
+        themePreference,
         shuffle: shuffleMode,
         repeatMode,
         eqPreset,
@@ -128,6 +207,7 @@
   let eqPreset = EQ_PRESETS[prefs.eqPreset] ? prefs.eqPreset : 'normal';
   let playbackSpeed = [0.85, 0.95, 1, 1.1].includes(Number(prefs.playbackSpeed)) ? Number(prefs.playbackSpeed) : 1;
   let vinylMode = Boolean(prefs.vinylMode);
+  let themePreference = ['auto', 'dark', 'light'].includes(prefs.themePreference) ? prefs.themePreference : 'auto';
   let playlistView = 'grid';
   let ambientMode = 'off'; // 'off' | 'vinyl' | 'rain'
   let ambientVolume = 0.28;
@@ -139,6 +219,13 @@
   let targetVolume = Number.isFinite(prefs.volume) ? Math.min(1, Math.max(0, prefs.volume)) : Number(volumeBar.value || 0.85);
   let favorites = new Set(Array.isArray(prefs.favorites) ? prefs.favorites : []);
   const playCounts = (prefs.playCounts && typeof prefs.playCounts === 'object') ? { ...prefs.playCounts } : {};
+  const savedMoments = (prefs.savedMoments && typeof prefs.savedMoments === 'object') ? { ...prefs.savedMoments } : {};
+  let abLoop = { a: null, b: null };
+  let lyricCardStyle = 'glass'; // 'glass' | 'polaroid' | 'vinyl'
+  let audioFadeRaf = null;
+  let offlineBusy = false;
+  let pendingMomentTime = 0;
+  let rawPalette = null;
   let countedTrackSession = false;
   let isCinemaMode = false;
   let pendingMomentToast = '';
@@ -354,7 +441,8 @@
   }
 
   function applyThemePalette(palette) {
-    const isLight = Boolean(palette.isLight);
+    rawPalette = { ...palette };
+    const isLight = themePreference === 'auto' ? Boolean(palette.isLight) : themePreference === 'light';
     const baseH = palette.baseH;
     const baseS = clamp(palette.baseS, 0.26, 0.72);
     const accentH = palette.accentH;
@@ -473,6 +561,29 @@
     for (const [name, value] of Object.entries(vars)) rootStyle.setProperty(name, value);
     setMetaContent('meta[name="theme-color"]', pageHex);
     if (!lyricCardModal.hidden) renderLyricCard();
+  }
+
+  function applyThemePreference(mode, { silent = false } = {}) {
+    themePreference = ['auto', 'dark', 'light'].includes(mode) ? mode : 'auto';
+    const btn = $('#themeToggleButton');
+    const label = $('#themeToggleLabel');
+    const labels = { auto: 'Auto', dark: 'Gelap', light: 'Terang' };
+    const tips = { auto: 'Tema: Auto (ikut cover)', dark: 'Tema: Mode Gelap', light: 'Tema: Mode Terang' };
+    if (btn) {
+      btn.dataset.themePref = themePreference;
+      btn.title = tips[themePreference];
+    }
+    if (label) label.textContent = labels[themePreference];
+    if (rawPalette) applyThemePalette(rawPalette);
+    savePrefs();
+    if (!silent) showToast(tips[themePreference]);
+  }
+
+  function cycleThemePreference() {
+    triggerHaptic(8);
+    const order = ['auto', 'dark', 'light'];
+    const next = order[(order.indexOf(themePreference) + 1) % order.length];
+    applyThemePreference(next);
   }
 
   function applyTrackTheme(track, coverUrl) {
@@ -1162,6 +1273,37 @@
     updatePlayState();
   }
 
+  function cancelNativeVolumeFade() {
+    if (audioFadeRaf) {
+      cancelAnimationFrame(audioFadeRaf);
+      audioFadeRaf = null;
+    }
+  }
+
+  function rampNativeVolume(fromVol, toVol, durationMs, onDone) {
+    cancelNativeVolumeFade();
+    const safeFrom = clamp(Number.isFinite(fromVol) ? fromVol : targetVolume, 0, 1);
+    const safeTo = clamp(Number.isFinite(toVol) ? toVol : targetVolume, 0, 1);
+    if (durationMs <= 0 || Math.abs(safeTo - safeFrom) < 0.005) {
+      try { audio.volume = safeTo; } catch (_e) { /* iOS Safari read-only volume. */ }
+      if (onDone) onDone();
+      return;
+    }
+    const start = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      try { audio.volume = clamp(safeFrom + (safeTo - safeFrom) * eased, 0, 1); } catch (_e) { /* Ignore. */ }
+      if (t < 1) {
+        audioFadeRaf = requestAnimationFrame(step);
+      } else {
+        audioFadeRaf = null;
+        if (onDone) onDone();
+      }
+    };
+    audioFadeRaf = requestAnimationFrame(step);
+  }
+
   async function tryPlay() {
     if (audioFailed) {
       showToast(`MP3 “${currentTrack().title}” belum tersedia. Pilih MP3 lokal untuk mencoba.`);
@@ -1171,6 +1313,7 @@
     userWantsPlaying = true;
     clearTimeout(pauseFadeTimer);
     clearTimeout(networkRetryTimer);
+    cancelNativeVolumeFade();
     ensureAudioGraph();
     if (audioCtx && audioCtx.state === 'suspended') {
       try { await audioCtx.resume(); } catch (_e) { /* Ignore. */ }
@@ -1179,12 +1322,18 @@
       const now = audioCtx.currentTime;
       gainNode.gain.cancelScheduledValues(now);
       gainNode.gain.setValueAtTime(Math.max(0.001, gainNode.gain.value * 0.25), now);
-      gainNode.gain.linearRampToValueAtTime(targetVolume, now + 0.22);
+      gainNode.gain.linearRampToValueAtTime(targetVolume, now + 0.24);
+    } else if (!IS_IOS && targetVolume > 0.04) {
+      try { audio.volume = Math.min(targetVolume, 0.05); } catch (_e) { /* Ignore. */ }
     } else {
-      audio.volume = targetVolume;
+      try { audio.volume = targetVolume; } catch (_e) { /* Ignore. */ }
     }
-    try { await audio.play(); }
-    catch (error) {
+    try {
+      await audio.play();
+      if (!(audioGraphReady && gainNode && audioCtx) && !IS_IOS && targetVolume > 0.04) {
+        rampNativeVolume(audio.volume, targetVolume, 240);
+      }
+    } catch (error) {
       if (error?.name === 'AbortError') return;
       if (audio.error) return;
       userWantsPlaying = false;
@@ -1192,12 +1341,13 @@
     }
   }
 
-  function smoothPause(durationMs = 180) {
+  function smoothPause(durationMs = 200) {
     userWantsPlaying = false;
     clearTimeout(networkRetryTimer);
     clearTimeout(stallWatchTimer);
     if (audio.paused) return;
     clearTimeout(pauseFadeTimer);
+    cancelNativeVolumeFade();
     if (audioGraphReady && gainNode && audioCtx) {
       const now = audioCtx.currentTime;
       gainNode.gain.cancelScheduledValues(now);
@@ -1207,6 +1357,12 @@
         audio.pause();
         if (gainNode && audioCtx) gainNode.gain.setValueAtTime(targetVolume, audioCtx.currentTime);
       }, durationMs);
+    } else if (!IS_IOS && !document.hidden && targetVolume > 0.04 && durationMs > 0) {
+      const startVol = Number.isFinite(audio.volume) ? audio.volume : targetVolume;
+      rampNativeVolume(startVol, 0.005, durationMs, () => {
+        if (!userWantsPlaying) audio.pause();
+        try { audio.volume = targetVolume; } catch (_e) { /* Ignore. */ }
+      });
     } else {
       audio.pause();
     }
@@ -1215,12 +1371,73 @@
   function togglePlay() {
     triggerHaptic(10);
     if (audio.paused) tryPlay();
-    else smoothPause(170);
+    else smoothPause(200);
+  }
+
+  function updateAbLoopUi() {
+    const btn = $('#abLoopButton');
+    const label = $('#abLoopLabel');
+    const hasA = abLoop.a !== null;
+    const hasB = abLoop.b !== null;
+    if (btn) {
+      btn.setAttribute('aria-pressed', String(hasA));
+      btn.classList.toggle('is-active', hasA);
+    }
+    if (label) {
+      if (hasA && hasB) label.textContent = `A ${timeString(abLoop.a)}–B ${timeString(abLoop.b)}`;
+      else if (hasA) label.textContent = `A ${timeString(abLoop.a)} · Set B`;
+      else label.textContent = 'A–B Reff';
+    }
+    const dur = Number.isFinite(audio.duration) ? audio.duration : 0;
+    for (const el of [$('#seekAbRange'), $('#sheetSeekAbRange')]) {
+      if (!el) continue;
+      if (hasA && hasB && dur > 0) {
+        const leftPct = clamp((abLoop.a / dur) * 100, 0, 100);
+        const widthPct = clamp(((abLoop.b - abLoop.a) / dur) * 100, 1, 100 - leftPct);
+        el.style.left = `${leftPct}%`;
+        el.style.width = `${widthPct}%`;
+        el.hidden = false;
+      } else {
+        el.hidden = true;
+      }
+    }
+  }
+
+  function cycleAbLoop() {
+    if (!ready) {
+      showToast('Putar lagu terlebih dahulu untuk menandai bagian A–B.');
+      return;
+    }
+    triggerHaptic(10);
+    const now = Math.max(0, audio.currentTime || 0);
+    if (abLoop.a === null) {
+      abLoop.a = Math.floor(now * 10) / 10;
+      abLoop.b = null;
+      updateAbLoopUi();
+      showToast(`Titik A ditandai di ${timeString(abLoop.a)} · ketuk lagi untuk titik B`);
+    } else if (abLoop.b === null) {
+      if (now <= abLoop.a + 1.5) {
+        showToast('Tunggu minimal 2 detik setelah titik A.');
+        return;
+      }
+      abLoop.b = Math.floor(now * 10) / 10;
+      updateAbLoopUi();
+      audio.currentTime = abLoop.a;
+      showToast(`Ulang bagian A–B aktif (${timeString(abLoop.a)} – ${timeString(abLoop.b)}) ↺`);
+    } else {
+      abLoop = { a: null, b: null };
+      updateAbLoopUi();
+      showToast('A–B Loop dimatikan.');
+    }
   }
 
   function progress() {
     const elapsed = audio.currentTime || 0;
     const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+    if (abLoop.a !== null && abLoop.b !== null && !audio.paused && !isSeeking && elapsed >= abLoop.b) {
+      audio.currentTime = abLoop.a;
+      return;
+    }
     const sec = Math.floor(elapsed);
     if (ready && !audio.paused && !countedTrackSession && sec >= 12) {
       countedTrackSession = true;
@@ -1499,6 +1716,9 @@
     }
     clearTimeout(networkRetryTimer);
     clearTimeout(stallWatchTimer);
+    cancelNativeVolumeFade();
+    abLoop = { a: null, b: null };
+    updateAbLoopUi();
     networkRetryCount = 0;
     activeIndex = index;
     countedTrackSession = false;
@@ -1510,6 +1730,8 @@
     ready = false;
     audioFailed = false;
     populateTrackInfo(track);
+    renderMomentsForTrack(track);
+    refreshOfflineUi(track);
     renderPlaylist();
     setReady(false);
     isSeeking = false;
@@ -1685,7 +1907,7 @@
     const track = currentTrack();
     const title = track?.title || 'lagu ini';
     const message = `Barusan dengerin “${title}” — ${track?.artist || 'Zandevaa'} 🎧\n`;
-    const waNumber = String(window.ZANDEVAA_WA_NUMBER || '').replace(/[^\d]/g, '');
+    const waNumber = String(STORY_CONFIG.whatsappNumber || window.ZANDEVAA_WA_NUMBER || '').replace(/[^\d]/g, '');
     const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(message)}`;
     window.open(waUrl, '_blank', 'noopener,noreferrer');
   }
@@ -1928,7 +2150,162 @@
     ctx.fillStyle = isLight ? 'rgba(248, 250, 255, 0.38)' : 'rgba(6, 12, 24, 0.42)';
     ctx.fillRect(0, 0, W, H);
 
-    // Glass Lyric Card container
+    const allLines = getSelectableLines();
+    const chosen = selectedCardLineIndices.length
+      ? selectedCardLineIndices.map((idx) => allLines[idx]?.text).filter(Boolean)
+      : [track.dedication || 'Ada cerita di balik setiap nada.'];
+
+    if (lyricCardStyle === 'polaroid') {
+      // ── Template 2: Warm Polaroid Frame ──
+      const pW = W - 160;
+      const pH = isStory ? 1240 : 1020;
+      const pX = (W - pW) / 2;
+      const pY = (H - pH) / 2 - (isStory ? 12 : 6);
+      ctx.save();
+      ctx.translate(W / 2, H / 2);
+      ctx.rotate(-0.018);
+      ctx.translate(-W / 2, -H / 2);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(pX, pY, pW, pH, 26);
+      ctx.fillStyle = '#faf6ef';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.42)';
+      ctx.shadowBlur = 72;
+      ctx.shadowOffsetY = 30;
+      ctx.fill();
+      ctx.restore();
+
+      const photoPad = 48;
+      const photoSize = isStory ? 540 : 410;
+      const photoX = (W - photoSize) / 2;
+      const photoY = pY + photoPad;
+      if (cardCoverImage) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(photoX, photoY, photoSize, photoSize, 12);
+        ctx.clip();
+        ctx.drawImage(cardCoverImage, photoX, photoY, photoSize, photoSize);
+        ctx.restore();
+      }
+      ctx.strokeStyle = 'rgba(30, 26, 22, 0.1)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(photoX, photoY, photoSize, photoSize);
+
+      const textStart = photoY + photoSize + 68;
+      const fontSize = chosen.length >= 4 ? 38 : chosen.length === 3 ? 44 : 48;
+      const lineHeight = Math.round(fontSize * 1.4);
+      ctx.font = `italic 500 ${fontSize}px "Playfair Display", Georgia, serif`;
+      ctx.fillStyle = '#1f232e';
+      ctx.textAlign = 'center';
+      const wrapped = chosen.flatMap((l) => wrapCanvasText(ctx, l, pW - 120)).slice(0, isStory ? 7 : 5);
+      let cy = textStart + 20;
+      for (const line of wrapped) {
+        ctx.fillText(line, W / 2, cy);
+        cy += lineHeight;
+      }
+
+      ctx.fillStyle = '#6f655c';
+      ctx.font = '700 24px "Manrope", system-ui, sans-serif';
+      ctx.fillText(`${track.title}  ·  ${track.artist || 'Zandevaa'}`, W / 2, pY + pH - 86);
+      ctx.fillStyle = '#9c8e82';
+      ctx.font = '600 20px "Manrope", system-ui, sans-serif';
+      ctx.fillText(`✧ zandevaa / Music Stories${track.date ? '  ·  ' + track.date : ''}`, W / 2, pY + pH - 46);
+      ctx.textAlign = 'left';
+      ctx.restore();
+      return;
+    }
+
+    if (lyricCardStyle === 'vinyl') {
+      // ── Template 3: Collector Vinyl Sleeve ──
+      ctx.fillStyle = 'rgba(6, 10, 20, 0.56)';
+      ctx.fillRect(0, 0, W, H);
+
+      const sleeveSize = isStory ? 440 : 350;
+      const sleeveX = (W - sleeveSize) / 2 - 78;
+      const sleeveY = isStory ? 250 : 140;
+      const discR = sleeveSize * 0.46;
+      const discCx = sleeveX + sleeveSize * 0.88;
+      const discCy = sleeveY + sleeveSize * 0.5;
+
+      // Grooved vinyl disc behind sleeve
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(discCx, discCy, discR, 0, Math.PI * 2);
+      ctx.fillStyle = '#121620';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+      ctx.shadowBlur = 46;
+      ctx.fill();
+      for (let r = discR - 14; r > discR * 0.38; r -= 10) {
+        ctx.beginPath();
+        ctx.arc(discCx, discCy, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      if (cardCoverImage) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(discCx, discCy, discR * 0.36, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(cardCoverImage, discCx - discR * 0.36, discCy - discR * 0.36, discR * 0.72, discR * 0.72);
+        ctx.restore();
+      }
+      ctx.beginPath();
+      ctx.arc(discCx, discCy, 14, 0, Math.PI * 2);
+      ctx.fillStyle = '#090d16';
+      ctx.fill();
+      ctx.restore();
+
+      // Album sleeve on top
+      if (cardCoverImage) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(sleeveX, sleeveY, sleeveSize, sleeveSize, 26);
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+        ctx.shadowBlur = 54;
+        ctx.shadowOffsetY = 20;
+        ctx.fillStyle = '#0a1220';
+        ctx.fill();
+        ctx.clip();
+        ctx.drawImage(cardCoverImage, sleeveX, sleeveY, sleeveSize, sleeveSize);
+        ctx.restore();
+        ctx.beginPath();
+        ctx.roundRect(sleeveX, sleeveY, sleeveSize, sleeveSize, 26);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+
+      // Centered title + lyrics
+      ctx.textAlign = 'center';
+      const titleY = sleeveY + sleeveSize + 92;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 46px "Playfair Display", Georgia, serif';
+      ctx.fillText(track.title, W / 2, titleY);
+      ctx.fillStyle = accent;
+      ctx.font = '700 24px "Manrope", system-ui, sans-serif';
+      ctx.fillText(`${(track.chapter || 'CHAPTER').toUpperCase()}  ·  ${track.artist || 'Zandevaa'}`, W / 2, titleY + 46);
+
+      const fontSize = chosen.length >= 4 ? 44 : chosen.length === 3 ? 50 : 56;
+      const lineHeight = Math.round(fontSize * 1.42);
+      ctx.font = `italic 500 ${fontSize}px "Playfair Display", Georgia, serif`;
+      ctx.fillStyle = 'rgba(244, 247, 252, 0.96)';
+      const wrapped = chosen.flatMap((l) => wrapCanvasText(ctx, l, W - 200)).slice(0, isStory ? 9 : 6);
+      let cy = titleY + 148;
+      for (const line of wrapped) {
+        ctx.fillText(line, W / 2, cy);
+        cy += lineHeight;
+      }
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.56)';
+      ctx.font = '700 23px "Manrope", system-ui, sans-serif';
+      ctx.fillText('✧  zandevaa / Music Stories', W / 2, H - 104);
+      ctx.textAlign = 'left';
+      return;
+    }
+
+    // ── Template 1: Glass Lyric Card container ──
     const padX = 88;
     const cardW = W - padX * 2;
     const cardH = isStory ? 1160 : 940;
@@ -1983,12 +2360,6 @@
     ctx.fillStyle = rose;
     ctx.font = 'italic 84px "Playfair Display", Georgia, serif';
     ctx.fillText('“', cardX + innerPad - 8, quoteTop + 42);
-
-    // Selected lyrics text
-    const allLines = getSelectableLines();
-    const chosen = selectedCardLineIndices.length
-      ? selectedCardLineIndices.map((idx) => allLines[idx]?.text).filter(Boolean)
-      : [track.dedication || 'Ada cerita di balik setiap nada.'];
 
     const fontSize = chosen.length >= 4 ? 46 : chosen.length === 3 ? 52 : 58;
     const lineHeight = Math.round(fontSize * 1.42);
@@ -2418,12 +2789,26 @@
   bindSeekControl(seekControl, seekBar);
   bindSeekControl(sheetSeekControl, sheetSeekBar);
 
-  // Prevent mobile pinch-zoom gestures while preserving normal scroll & seek scrubbing.
+  // Prevent mobile pinch-zoom, trackpad zoom, and accidental double-tap zoom while preserving
+  // normal scrolling, horizontal carousels, cover double-tap skip, and seek scrubbing.
   ['gesturestart', 'gesturechange', 'gestureend'].forEach((type) => {
     document.addEventListener(type, (event) => event.preventDefault(), { passive: false });
   });
+  document.addEventListener('touchstart', (event) => {
+    if (event.touches.length > 1) event.preventDefault();
+  }, { passive: false });
   document.addEventListener('touchmove', (event) => {
     if (event.touches.length > 1) event.preventDefault();
+  }, { passive: false });
+  document.addEventListener('wheel', (event) => {
+    if (event.ctrlKey) event.preventDefault();
+  }, { passive: false });
+  let lastTouchEndTime = 0;
+  document.addEventListener('touchend', (event) => {
+    if (event.target.closest('#heroCoverFrame, #sheetCoverStage, #dedicationHeart, button, input, .seek-control')) return;
+    const now = Date.now();
+    if (now - lastTouchEndTime <= 300) event.preventDefault();
+    lastTouchEndTime = now;
   }, { passive: false });
 
   volumeBar.addEventListener('input', () => setOutputVolume(Number(volumeBar.value)));
@@ -2599,6 +2984,13 @@
       renderLyricCard();
     });
   });
+  lyricCardModal?.querySelectorAll('.style-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      lyricCardStyle = ['glass', 'polaroid', 'vinyl'].includes(btn.dataset.cardStyle) ? btn.dataset.cardStyle : 'glass';
+      lyricCardModal.querySelectorAll('.style-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      renderLyricCard();
+    });
+  });
   $('#resetLyricSelection')?.addEventListener('click', () => {
     selectedCardLineIndices = [];
     lyricCardLinesEl.querySelectorAll('.card-line-btn').forEach((b) => b.classList.remove('selected'));
@@ -2711,6 +3103,474 @@
   });
   $('#welcomeSkipBtn')?.addEventListener('click', () => dismissWelcomeGate({ autoplay: false }));
 
+  // ─── First-Time Passcode Lock Gate (Glass Numpad + Desktop Keyboard) ───
+  let passcodeChecking = false;
+
+  function renderPasscodeSlots() {
+    const val = (passcodeInput?.value || '').replace(/\D/g, '').slice(0, 6);
+    if (passcodeInput && passcodeInput.value !== val) passcodeInput.value = val;
+    const slots = $('#passcodeSlots')?.querySelectorAll('.passcode-slot');
+    if (!slots) return;
+    slots.forEach((slot, i) => {
+      slot.classList.toggle('is-filled', i < val.length);
+      slot.classList.toggle('is-active', !siteUnlocked && i === Math.min(val.length, 5) && val.length < 6);
+    });
+  }
+
+  function appendPasscodeDigit(digit) {
+    if (siteUnlocked || passcodeChecking || !passcodeInput) return;
+    const clean = String(digit).replace(/\D/g, '');
+    if (!clean || passcodeInput.value.length >= 6) return;
+    triggerHaptic(8);
+    passcodeForm?.classList.remove('is-error');
+    if (passcodeFeedback) passcodeFeedback.textContent = '';
+    passcodeInput.value = (passcodeInput.value + clean).slice(0, 6);
+    renderPasscodeSlots();
+    if (passcodeInput.value.length === 6) verifyPasscode();
+  }
+
+  function backspacePasscode() {
+    if (siteUnlocked || passcodeChecking || !passcodeInput || !passcodeInput.value.length) return;
+    triggerHaptic(6);
+    passcodeForm?.classList.remove('is-error');
+    if (passcodeFeedback) passcodeFeedback.textContent = '';
+    passcodeInput.value = passcodeInput.value.slice(0, -1);
+    renderPasscodeSlots();
+  }
+
+  function clearPasscode() {
+    if (siteUnlocked || passcodeChecking || !passcodeInput) return;
+    triggerHaptic(8);
+    passcodeForm?.classList.remove('is-error');
+    if (passcodeFeedback) passcodeFeedback.textContent = '';
+    passcodeInput.value = '';
+    renderPasscodeSlots();
+  }
+
+  function verifyPasscode() {
+    if (!passcodeInput || !passcodeForm || siteUnlocked || passcodeChecking) return;
+    const code = passcodeInput.value.replace(/\D/g, '').slice(0, 6);
+    if (code.length < 6) {
+      if (passcodeFeedback) passcodeFeedback.textContent = 'Masukkan 6 digit passcode.';
+      return;
+    }
+    passcodeChecking = true;
+    const isPasscodeValid = PASSCODE_HASH
+      ? sha256Hex(code) === PASSCODE_HASH
+      : code === PASSCODE_FALLBACK;
+    if (isPasscodeValid) {
+      siteUnlocked = true;
+      try {
+        localStorage.setItem(PASSCODE_STORAGE_KEY, 'true');
+        sessionStorage.setItem('zandevaa_opened', '1');
+      } catch (_e) { /* Ignore storage errors. */ }
+      triggerHaptic(16);
+      passcodeForm.classList.remove('is-error');
+      passcodeForm.classList.add('is-success');
+      if (passcodeFeedback) passcodeFeedback.textContent = 'Passcode benar · Membuka cerita…';
+      setTimeout(() => {
+        document.documentElement.classList.remove('is-locked');
+        passcodeGate?.classList.add('is-unlocking');
+        setTimeout(() => {
+          passcodeGate?.classList.remove('is-unlocking');
+          passcodeForm.classList.remove('is-success');
+          passcodeInput.value = '';
+          passcodeChecking = false;
+        }, 440);
+      }, 360);
+    } else {
+      triggerHaptic([28, 36, 28]);
+      passcodeForm.classList.remove('is-error');
+      void passcodeForm.offsetWidth;
+      passcodeForm.classList.add('is-error');
+      if (passcodeFeedback) passcodeFeedback.textContent = 'Passcode belum tepat. Coba lagi ya.';
+      setTimeout(() => {
+        if (!siteUnlocked && passcodeInput) {
+          passcodeInput.value = '';
+          renderPasscodeSlots();
+          passcodeForm.classList.remove('is-error');
+        }
+        passcodeChecking = false;
+      }, 480);
+    }
+  }
+
+  function lockSiteAgain() {
+    siteUnlocked = false;
+    passcodeChecking = false;
+    try { localStorage.removeItem(PASSCODE_STORAGE_KEY); } catch (_e) { /* Ignore. */ }
+    if (!audio.paused) smoothPause(140);
+    if (passcodeInput) passcodeInput.value = '';
+    if (passcodeFeedback) passcodeFeedback.textContent = '';
+    passcodeForm?.classList.remove('is-error', 'is-success');
+    document.documentElement.classList.add('is-locked');
+    renderPasscodeSlots();
+  }
+
+  function initPasscodeGate() {
+    if (siteUnlocked) {
+      document.documentElement.classList.remove('is-locked');
+      return;
+    }
+    document.documentElement.classList.add('is-locked');
+    renderPasscodeSlots();
+  }
+
+  $('#passcodeNumpad')?.addEventListener('click', (event) => {
+    const btn = event.target.closest('.num-key');
+    if (!btn) return;
+    if (btn.dataset.key !== undefined) appendPasscodeDigit(btn.dataset.key);
+    else if (btn.dataset.action === 'backspace') backspacePasscode();
+    else if (btn.dataset.action === 'clear') clearPasscode();
+  });
+  passcodeForm?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    verifyPasscode();
+  });
+  $('#relockSiteBtn')?.addEventListener('click', lockSiteAgain);
+
+  // ─── Time-Aware Greeting, Digital Liner Notes Timeline & Secret Letter Easter Egg ───
+  function updateTimeGreeting() {
+    const el = $('#timeGreeting');
+    if (!el) return;
+    const hour = new Date().getHours();
+    const name = STORY_CONFIG.recipientName || 'Syifa';
+    let text;
+    if (hour >= 5 && hour < 11) text = `☀ Selamat pagi, ${name}`;
+    else if (hour >= 11 && hour < 15) text = `✦ Selamat siang, ${name}`;
+    else if (hour >= 15 && hour < 18) text = `✧ Selamat sore, ${name}`;
+    else text = `☾ Selamat malam, ${name}`;
+    el.textContent = text;
+  }
+
+  // ─── Personal Moments Bookmarking (Timestamp + Short Note) ───
+  const momentModal = $('#momentModal');
+  const momentForm = $('#momentForm');
+  const momentNoteInput = $('#momentNoteInput');
+
+  function renderMomentsForTrack(track) {
+    const listEl = $('#momentsList');
+    if (!listEl || !track) return;
+    const items = Array.isArray(savedMoments[track.id]) ? savedMoments[track.id] : [];
+    if (!items.length) {
+      const empty = document.createElement('span');
+      empty.className = 'moments-empty';
+      empty.textContent = 'Belum ada momen ditandai di lagu ini.';
+      listEl.replaceChildren(empty);
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    items.forEach((item) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'moment-chip';
+      const jumpBtn = document.createElement('button');
+      jumpBtn.type = 'button';
+      jumpBtn.className = 'moment-jump-btn';
+      jumpBtn.title = `Putar mulai ${timeString(item.time)}`;
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'moment-chip-time';
+      timeSpan.textContent = timeString(item.time);
+      const noteSpan = document.createElement('span');
+      noteSpan.className = 'moment-chip-note';
+      noteSpan.textContent = item.note || 'Momen favorit';
+      jumpBtn.append(timeSpan, noteSpan);
+      jumpBtn.addEventListener('click', () => {
+        triggerHaptic(8);
+        if (ready) {
+          audio.currentTime = Math.min(Number.isFinite(audio.duration) ? audio.duration : item.time, item.time);
+          progress();
+          if (audio.paused) tryPlay();
+          showToast(`Melompat ke momen ${timeString(item.time)} ♪`);
+        } else {
+          pendingRestoreTime = item.time;
+          tryPlay();
+        }
+      });
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'moment-del-btn';
+      delBtn.setAttribute('aria-label', `Hapus momen ${timeString(item.time)}`);
+      delBtn.textContent = '×';
+      delBtn.addEventListener('click', () => {
+        const current = Array.isArray(savedMoments[track.id]) ? savedMoments[track.id] : [];
+        savedMoments[track.id] = current.filter((m) => m.id !== item.id);
+        if (!savedMoments[track.id].length) delete savedMoments[track.id];
+        savePrefs();
+        renderMomentsForTrack(track);
+        showToast('Momen dihapus.');
+      });
+      wrap.append(jumpBtn, delBtn);
+      frag.append(wrap);
+    });
+    listEl.replaceChildren(frag);
+  }
+
+  function openMomentModal() {
+    const track = currentTrack();
+    if (!track || !momentModal) return;
+    pendingMomentTime = Math.floor(audio.currentTime || 0);
+    if ($('#momentTimeBadge')) $('#momentTimeBadge').textContent = `♪ ${timeString(pendingMomentTime)} · ${track.title}`;
+    if (momentNoteInput) momentNoteInput.value = '';
+    momentModal.hidden = false;
+    setTimeout(() => momentNoteInput?.focus(), 60);
+  }
+
+  function closeMomentModal() {
+    if (momentModal) momentModal.hidden = true;
+  }
+
+  momentForm?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const track = currentTrack();
+    if (!track) return;
+    const note = (momentNoteInput?.value || '').trim() || 'Momen favorit';
+    const list = Array.isArray(savedMoments[track.id]) ? [...savedMoments[track.id]] : [];
+    list.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, time: pendingMomentTime, note });
+    list.sort((a, b) => a.time - b.time);
+    savedMoments[track.id] = list;
+    savePrefs();
+    renderMomentsForTrack(track);
+    closeMomentModal();
+    triggerHaptic(12);
+    showToast(`Momen ${timeString(pendingMomentTime)} tersimpan ♡`);
+  });
+  $('#addMomentButton')?.addEventListener('click', openMomentModal);
+  $('#sheetBookmarkMomentBtn')?.addEventListener('click', openMomentModal);
+  $('#closeMomentModal')?.addEventListener('click', closeMomentModal);
+  $('#cancelMomentBtn')?.addEventListener('click', closeMomentModal);
+  momentModal?.addEventListener('click', (e) => { if (e.target === momentModal) closeMomentModal(); });
+
+  // ─── Opt-In Offline Audio Download per Track (Cache API) ───
+  function getTrackCacheUrl(track) {
+    if (!track?.audio) return '';
+    try { return new URL(resolvePath(track.audio), location.href).href; }
+    catch (_e) { return resolvePath(track.audio); }
+  }
+
+  async function isTrackSavedOffline(track) {
+    if (!IS_HTTP || !('caches' in window) || !track?.audio) return false;
+    try {
+      const cache = await caches.open(OFFLINE_AUDIO_CACHE);
+      const hit = await cache.match(getTrackCacheUrl(track));
+      return Boolean(hit);
+    } catch (_e) { return false; }
+  }
+
+  async function refreshOfflineUi(track = currentTrack()) {
+    const supported = IS_HTTP && ('caches' in window);
+    const saved = supported ? await isTrackSavedOffline(track) : false;
+    for (const [btn, labelEl] of [
+      [$('#offlineSaveButton'), $('#offlineSaveLabel')],
+      [$('#sheetOfflineButton'), $('#sheetOfflineLabel')]
+    ]) {
+      if (!btn) continue;
+      btn.hidden = !supported;
+      btn.setAttribute('aria-pressed', String(saved));
+      btn.classList.toggle('is-saved', saved);
+      btn.title = saved ? 'Tersimpan offline · ketuk untuk hapus cache lagu ini' : 'Simpan lagu agar bisa diputar tanpa sinyal';
+      if (labelEl) labelEl.textContent = saved ? 'Tersimpan' : 'Offline';
+    }
+  }
+
+  async function toggleOfflineSave() {
+    const track = currentTrack();
+    if (!track?.audio || offlineBusy) return;
+    if (!IS_HTTP || !('caches' in window)) {
+      showToast('Fitur simpan offline tersedia saat dibuka lewat HTTPS / GitHub Pages.');
+      return;
+    }
+    triggerHaptic(10);
+    offlineBusy = true;
+    const url = getTrackCacheUrl(track);
+    const saved = await isTrackSavedOffline(track);
+    try {
+      const cache = await caches.open(OFFLINE_AUDIO_CACHE);
+      if (saved) {
+        await cache.delete(url);
+        showToast(`Salinan offline “${track.title}” dihapus.`);
+      } else {
+        for (const labelEl of [$('#offlineSaveLabel'), $('#sheetOfflineLabel')]) {
+          if (labelEl) labelEl.textContent = 'Menyimpan…';
+        }
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await cache.put(url, res.clone());
+        showToast(`“${track.title}” siap diputar offline tanpa sinyal ✓`);
+      }
+    } catch (_e) {
+      showToast('Gagal menyimpan audio offline. Periksa koneksi internet.');
+    } finally {
+      offlineBusy = false;
+      refreshOfflineUi(track);
+    }
+  }
+
+  $('#offlineSaveButton')?.addEventListener('click', toggleOfflineSave);
+  $('#sheetOfflineButton')?.addEventListener('click', toggleOfflineSave);
+  $('#abLoopButton')?.addEventListener('click', cycleAbLoop);
+  $('#themeToggleButton')?.addEventListener('click', cycleThemePreference);
+
+  // ─── Mini "Our Recap" in Liner Notes Modal ───
+  async function renderOurRecap() {
+    const el = $('#ourRecapCard');
+    if (!el) return;
+    const totalPlays = tracks.reduce((sum, t) => sum + (Number(playCounts[t.id]) || 0), 0);
+    const totalMoments = Object.values(savedMoments).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0);
+    let topTrack = tracks[0] || null;
+    let topCount = 0;
+    for (const t of tracks) {
+      const c = Number(playCounts[t.id]) || 0;
+      if (c > topCount) { topCount = c; topTrack = t; }
+    }
+    let offlineCount = 0;
+    if (IS_HTTP && 'caches' in window) {
+      try {
+        const cache = await caches.open(OFFLINE_AUDIO_CACHE);
+        offlineCount = (await cache.keys()).length;
+      } catch (_e) { offlineCount = 0; }
+    }
+    el.replaceChildren();
+    const head = document.createElement('div');
+    head.className = 'recap-head';
+    head.innerHTML = `<span class="story-label">✦ OUR RECAP · RINGKASAN PERJALANAN</span>`;
+
+    const stats = document.createElement('div');
+    stats.className = 'recap-stats';
+    const items = [
+      { value: String(totalPlays), label: 'Total Putar' },
+      { value: String(favorites.size), label: 'Favorit ♥' },
+      { value: String(totalMoments), label: 'Momen' },
+      { value: String(offlineCount), label: 'Offline' }
+    ];
+    items.forEach(({ value, label }) => {
+      const box = document.createElement('div');
+      box.className = 'recap-stat';
+      const v = document.createElement('strong');
+      v.textContent = value;
+      const l = document.createElement('span');
+      l.textContent = label;
+      box.append(v, l);
+      stats.append(box);
+    });
+
+    el.append(head, stats);
+    if (topTrack && topCount > 0) {
+      const topRow = document.createElement('div');
+      topRow.className = 'recap-top-track';
+      const img = document.createElement('img');
+      img.src = resolvePath(topTrack.cover || 'assets/cover.webp');
+      img.alt = '';
+      const info = document.createElement('div');
+      const k = document.createElement('small');
+      k.textContent = 'LAGU PALING SERING DIPUTAR';
+      const title = document.createElement('strong');
+      title.textContent = `${topTrack.title} · ${topCount}×`;
+      info.append(k, title);
+      topRow.append(img, info);
+      el.append(topRow);
+    }
+  }
+
+  function openTimelineModal() {
+    const listEl = $('#storyTimelineList');
+    if (!storyTimelineModal || !listEl) return;
+    renderOurRecap();
+    const frag = document.createDocumentFragment();
+    tracks.forEach((track, idx) => {
+      const card = document.createElement('article');
+      card.className = `timeline-entry${idx === activeIndex ? ' is-current' : ''}`;
+      const img = document.createElement('img');
+      img.className = 'timeline-cover';
+      img.src = resolvePath(track.cover || 'assets/cover.webp');
+      img.alt = `Cover ${track.title}`;
+      const body = document.createElement('div');
+      body.className = 'timeline-body';
+      const meta = document.createElement('div');
+      meta.className = 'timeline-meta';
+      const ch = track.chapter || `Chapter ${String(idx + 1).padStart(2, '0')}`;
+      meta.textContent = [ch, track.date, track.mood].filter(Boolean).join(' · ');
+      const title = document.createElement('h4');
+      title.className = 'timeline-title';
+      title.textContent = track.title;
+      const story = document.createElement('p');
+      story.className = 'timeline-story';
+      story.textContent = track.story || track.description || '';
+      const quote = document.createElement('p');
+      quote.className = 'timeline-quote';
+      quote.textContent = `“${track.dedication || ''}”`;
+      const playBtn = document.createElement('button');
+      playBtn.type = 'button';
+      playBtn.className = 'timeline-play-btn';
+      playBtn.textContent = idx === activeIndex && !audio.paused ? '♪ Sedang diputar' : '▶ Putar bab ini';
+      playBtn.addEventListener('click', () => {
+        closeTimelineModal();
+        if (idx === activeIndex) { if (audio.paused) tryPlay(); }
+        else switchTrack(idx, { autoplay: true, animate: true });
+      });
+      body.append(meta, title);
+      if (story.textContent) body.append(story);
+      if (track.dedication) body.append(quote);
+      body.append(playBtn);
+      card.append(img, body);
+      frag.append(card);
+    });
+    listEl.replaceChildren(frag);
+    storyTimelineModal.hidden = false;
+  }
+
+  function closeTimelineModal() {
+    if (storyTimelineModal) storyTimelineModal.hidden = true;
+  }
+
+  $('#openTimelineBtn')?.addEventListener('click', openTimelineModal);
+  $('#closeTimelineModal')?.addEventListener('click', closeTimelineModal);
+  storyTimelineModal?.addEventListener('click', (e) => { if (e.target === storyTimelineModal) closeTimelineModal(); });
+
+  function openSecretLetter() {
+    if (!secretLetterModal) return;
+    const letter = STORY_CONFIG.secretLetter || {};
+    if ($('#secretLetterEyebrow') && letter.eyebrow) $('#secretLetterEyebrow').textContent = letter.eyebrow;
+    if ($('#secretLetterTitle') && letter.title) $('#secretLetterTitle').textContent = letter.title;
+    if ($('#secretLetterSign') && letter.sign) $('#secretLetterSign').textContent = letter.sign;
+    const bodyEl = $('#secretLetterBody');
+    if (bodyEl) {
+      const paras = Array.isArray(letter.paragraphs) && letter.paragraphs.length
+        ? letter.paragraphs
+        : ['Terima kasih sudah mendengarkan setiap lagu dan membaca setiap bait cerita ini.'];
+      bodyEl.replaceChildren(...paras.map((text) => {
+        const p = document.createElement('p');
+        p.textContent = text;
+        return p;
+      }));
+    }
+    triggerHaptic([14, 30, 18]);
+    secretLetterModal.hidden = false;
+  }
+
+  function closeSecretLetter() {
+    if (secretLetterModal) secretLetterModal.hidden = true;
+  }
+
+  let heartTapCount = 0;
+  let heartTapTimer = null;
+  $('#dedicationHeart')?.addEventListener('click', () => {
+    const heart = $('#dedicationHeart');
+    heartTapCount++;
+    triggerHaptic(10);
+    heart?.classList.remove('heart-tap');
+    void heart?.offsetWidth;
+    heart?.classList.add('heart-tap');
+    clearTimeout(heartTapTimer);
+    if (heartTapCount >= 3) {
+      heartTapCount = 0;
+      openSecretLetter();
+      return;
+    }
+    heartTapTimer = setTimeout(() => { heartTapCount = 0; }, 2200);
+  });
+  $('#closeSecretLetter')?.addEventListener('click', closeSecretLetter);
+  secretLetterModal?.addEventListener('click', (e) => { if (e.target === secretLetterModal) closeSecretLetter(); });
+
   // Desktop Keyboard Shortcuts Modal
   const openShortcutsModal = () => { if (shortcutsModal) shortcutsModal.hidden = false; };
   const closeShortcutsModal = () => { if (shortcutsModal) shortcutsModal.hidden = true; };
@@ -2788,20 +3648,128 @@
     installAppButton.hidden = true;
   });
 
-  // Mobile Swipe Gestures (Cover, Now Playing Art, Dock, Sheet Close)
+  // ─── Interactive Drag-to-Dismiss on Now Playing Sheet + Dock Swipe Feedback ───
+  function attachSheetDragToDismiss() {
+    if (!nowPlayingSheet) return;
+    const shell = nowPlayingSheet.querySelector('.np-shell');
+    const backdrop = nowPlayingSheet.querySelector('.np-backdrop');
+    const playerPanel = $('#npPlayerPanel');
+    let startY = 0;
+    let startX = 0;
+    let startTime = 0;
+    let dragY = 0;
+    let dragging = false;
+
+    const resetTransform = () => {
+      if (shell) {
+        shell.style.transition = '';
+        shell.style.transform = '';
+      }
+      if (backdrop) {
+        backdrop.style.transition = '';
+        backdrop.style.opacity = '';
+      }
+    };
+
+    nowPlayingSheet.addEventListener('touchstart', (e) => {
+      if (!isSheetOpen || e.touches.length !== 1) return;
+      if (e.target.closest('input, button, .seek-control, .np-lyrics-scroll')) return;
+      const inTopHandle = Boolean(e.target.closest('#npDragBar, .np-topbar'));
+      const inTopOfPanel = Boolean(e.target.closest('#npPlayerPanel')) && (!playerPanel || playerPanel.scrollTop <= 2);
+      if (!inTopHandle && !inTopOfPanel) return;
+      startY = e.touches[0].clientY;
+      startX = e.touches[0].clientX;
+      startTime = performance.now();
+      dragY = 0;
+      dragging = true;
+    }, { passive: true });
+
+    nowPlayingSheet.addEventListener('touchmove', (e) => {
+      if (!dragging || !e.touches.length) return;
+      const dy = e.touches[0].clientY - startY;
+      const dx = Math.abs(e.touches[0].clientX - startX);
+      if (dy <= 6 || (dragY === 0 && dx > dy)) {
+        if (dx > 18 && dragY === 0) dragging = false;
+        return;
+      }
+      dragY = dy;
+      if (shell) {
+        shell.style.transition = 'none';
+        shell.style.transform = `translate3d(0, ${Math.min(dy, 420)}px, 0)`;
+      }
+      if (backdrop) {
+        backdrop.style.transition = 'none';
+        backdrop.style.opacity = String(clamp(1 - dy / 340, 0.15, 1));
+      }
+    }, { passive: true });
+
+    const finishDrag = () => {
+      if (!dragging) return;
+      dragging = false;
+      if (dragY <= 0) return;
+      const elapsed = Math.max(1, performance.now() - startTime);
+      const velocity = dragY / elapsed;
+      if (dragY > 96 || (dragY > 42 && velocity > 0.45)) {
+        triggerHaptic(8);
+        if (shell) {
+          shell.style.transition = 'transform .22s cubic-bezier(.22, 1, .36, 1)';
+          shell.style.transform = 'translate3d(0, 100%, 0)';
+        }
+        setTimeout(() => {
+          closeNowPlayingSheet();
+          setTimeout(resetTransform, 340);
+        }, 180);
+      } else {
+        if (shell) {
+          shell.style.transition = 'transform .26s cubic-bezier(.22, 1, .36, 1)';
+          shell.style.transform = 'translate3d(0, 0, 0)';
+        }
+        if (backdrop) {
+          backdrop.style.transition = 'opacity .26s ease';
+          backdrop.style.opacity = '1';
+        }
+        setTimeout(resetTransform, 280);
+      }
+      dragY = 0;
+    };
+
+    nowPlayingSheet.addEventListener('touchend', finishDrag, { passive: true });
+    nowPlayingSheet.addEventListener('touchcancel', finishDrag, { passive: true });
+  }
+
+  function nudgeDock(direction) {
+    if (!musicDock) return;
+    const cls = direction === 'next' ? 'dock-swipe-next' : 'dock-swipe-prev';
+    musicDock.classList.remove('dock-swipe-next', 'dock-swipe-prev');
+    void musicDock.offsetWidth;
+    musicDock.classList.add(cls);
+    setTimeout(() => musicDock.classList.remove(cls), 260);
+  }
+
+  // Mobile Swipe Gestures (Cover, Now Playing Art, Dock, Sheet Drag-to-Dismiss)
   attachHorizontalSwipe($('.cover-stage'), { onLeft: nextTrack, onRight: previousTrack });
   attachHorizontalSwipe($('#sheetCoverStage'), { onLeft: nextTrack, onRight: previousTrack });
   attachHorizontalSwipe(musicDock, {
-    onLeft: nextTrack,
-    onRight: previousTrack,
+    onLeft: () => { nudgeDock('next'); nextTrack(); },
+    onRight: () => { nudgeDock('prev'); previousTrack(); },
     onUp: () => openNowPlayingSheet('player'),
     ignoreSelector: '.seek-control, button, input'
   });
-  attachHorizontalSwipe($('.np-topbar'), { onDown: closeNowPlayingSheet });
-  attachHorizontalSwipe($('#npDragBar'), { onDown: closeNowPlayingSheet });
+  attachSheetDragToDismiss();
 
   document.addEventListener('keydown', (event) => {
+    if (!siteUnlocked) {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (/^[0-9]$/.test(event.key)) { event.preventDefault(); appendPasscodeDigit(event.key); }
+      else if (event.key === 'Backspace') { event.preventDefault(); backspacePasscode(); }
+      else if (event.key === 'Escape') { event.preventDefault(); clearPasscode(); }
+      else if (event.key === 'Enter') { event.preventDefault(); verifyPasscode(); }
+      return;
+    }
     if (event.key === 'Escape') {
+      if (momentModal && !momentModal.hidden) { closeMomentModal(); return; }
+      if (secretLetterModal && !secretLetterModal.hidden) { closeSecretLetter(); return; }
+      if (storyTimelineModal && !storyTimelineModal.hidden) { closeTimelineModal(); return; }
       if (welcomeGate && !welcomeGate.hidden) { dismissWelcomeGate({ autoplay: false }); return; }
       if (shortcutsModal && !shortcutsModal.hidden) { closeShortcutsModal(); return; }
       if (!lrcSyncModal.hidden) { closeLrcSyncModal(); return; }
@@ -2829,6 +3797,9 @@
     else if (event.key === 'n' || event.key === 'N') nextTrack();
     else if (event.key === 'p' || event.key === 'P') previousTrack();
     else if (event.key === 'v' || event.key === 'V') applyVinylMode(!vinylMode);
+    else if (event.key === 't' || event.key === 'T') cycleThemePreference();
+    else if (event.key === 'a' || event.key === 'A') cycleAbLoop();
+    else if (event.key === 'b' || event.key === 'B') openMomentModal();
     else if (event.key === 'f' || event.key === 'F') toggleFavorite();
     else if (event.key === 'l' || event.key === 'L') {
       if (isSheetOpen) closeNowPlayingSheet();
@@ -2904,11 +3875,14 @@
     applyEqPreset(eqPreset, { silent: true });
     applyPlaybackSpeed(playbackSpeed, { silent: true });
     applyVinylMode(vinylMode, { silent: true });
+    applyThemePreference(themePreference, { silent: true });
     applyPlaylistView(playlistView);
+    updateTimeGreeting();
+    initPasscodeGate();
     switchTrack(index >= 0 ? index : 0, { updateUrl: IS_HTTP || index >= 0 });
-    if (isCreatorSync) {
+    if (isCreatorSync && siteUnlocked) {
       setTimeout(() => openLrcSyncModal(), 450);
-    } else {
+    } else if (siteUnlocked) {
       let alreadyOpened = false;
       try { alreadyOpened = sessionStorage.getItem('zandevaa_opened') === '1'; } catch (_e) { alreadyOpened = false; }
       if (params.get('open') === '1' || !alreadyOpened) {

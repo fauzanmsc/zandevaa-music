@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#061226" />
   <!-- SHARE_META_START -->
   <meta name="description" content="Ada perasaan yang tak selalu pandai menjadi kata. Jadi, biarkan lagu ini yang bercerita." />
@@ -34,6 +34,15 @@
     href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400;1,500;1,600&display=swap"
     rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
+  <script>
+    try {
+      if (localStorage.getItem('zandevaa_passcode_unlocked_v1') !== 'true') {
+        document.documentElement.classList.add('is-locked');
+      }
+    } catch (_e) {
+      document.documentElement.classList.add('is-locked');
+    }
+  </script>
   <script defer src="playlist.js"></script>
   <script defer src="app.js"></script>
 </head>
@@ -52,6 +61,12 @@
       <span class="brand-text">zandevaa<span class="brand-light"> / Music Stories</span></span>
     </a>
     <div class="topbar-actions">
+      <button class="theme-button" id="themeToggleButton" type="button" aria-label="Ubah tema tampilan (Auto / Gelap / Terang)" title="Tema: Auto (ikut cover)">
+        <svg class="theme-icon-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 0 0 16V4Z" fill="currentColor" stroke="none" /></svg>
+        <svg class="theme-icon-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" /></svg>
+        <svg class="theme-icon-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" /></svg>
+        <span id="themeToggleLabel">Auto</span>
+      </button>
       <button class="install-button" id="installAppButton" type="button" hidden aria-label="Pasang aplikasi ke layar utama" title="Pasang ke Layar Utama">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /></svg>
         <span>Install</span>
@@ -65,7 +80,14 @@
     </div>
   </header>
 
-  <nav class="chapter-strip container" id="chapterTimeline" aria-label="Bab cerita musik"></nav>
+  <div class="story-subbar container">
+    <span class="time-greeting" id="timeGreeting">✦ Halo, Syifa</span>
+    <nav class="chapter-strip" id="chapterTimeline" aria-label="Bab cerita musik"></nav>
+    <button type="button" class="liner-notes-btn" id="openTimelineBtn" title="Lihat linimasa perjalanan semua lagu">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" /></svg>
+      <span>Liner Notes</span>
+    </button>
+  </div>
 
   <main id="awal" class="container page-layout">
     <section class="cover-section" aria-labelledby="pageTitle">
@@ -91,7 +113,7 @@
           </svg>
         </div>
         <div class="cover-frame" id="heroCoverFrame">
-          <img class="cover-image" id="heroCover" src="assets/cover.webp" width="1254" height="1254"
+          <img class="cover-image" id="heroCover" src="assets/cover.webp" width="1000" height="1000"
             alt="Cover lagu Untukmu Syifa dengan potret perempuan berhijab dalam cahaya navy dan merah, dan tipografi putih"
             fetchpriority="high" />
           <span class="cover-shine" aria-hidden="true"></span>
@@ -112,6 +134,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-7.5-4.7-9.3-9C1.3 8.1 3.7 4.8 7.2 4.8c2 0 3.7 1.1 4.8 2.8 1.1-1.7 2.8-2.8 4.8-2.8 3.5 0 5.9 3.3 4.5 6.7-1.8 4.3-9.3 9-9.3 9Z" /></svg>
             <span id="heroFavoriteLabel">Sukai</span>
           </button>
+          <button class="fav-pill offline-pill" id="offlineSaveButton" type="button" aria-pressed="false" title="Simpan audio agar bisa diputar tanpa sinyal">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /></svg>
+            <span id="offlineSaveLabel">Offline</span>
+          </button>
           <span class="footnote-date">A little piece of my heart, for you.</span>
         </div>
       </div>
@@ -128,6 +154,16 @@
             </button>
           </div>
           <p class="story-text" id="heroStory"></p>
+        </div>
+        <div class="moments-box" id="momentsBox">
+          <div class="story-box-head">
+            <span class="story-label">MOMEN FAVORIT</span>
+            <button class="moment-add-btn" id="addMomentButton" type="button" title="Simpan detik saat ini sebagai momen favorit">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+              <span>+ Tandai Detik Ini</span>
+            </button>
+          </div>
+          <div class="moments-list" id="momentsList"></div>
         </div>
       </div>
     </section>
@@ -193,7 +229,7 @@
         </div>
       </div>
       <div class="dedication">
-        <span class="dedication-symbol">♡</span>
+        <button type="button" class="dedication-symbol" id="dedicationHeart" aria-label="Simbol hati dedikasi" title="Ketuk 3× untuk sesuatu yang rahasia">♡</button>
         <p>Untuk semua perjalanan yang belum kita mulai, dan cerita yang semoga suatu hari bisa kita tulis bersama.</p>
         <span class="dedication-sign">— Zandevaa</span>
         <div class="dedication-actions">
@@ -250,6 +286,10 @@
     <span>MADE WITH <span class="footer-heart">♥</span> FOR SYIFA</span>
     <div class="footer-right">
       <button type="button" class="shortcuts-hint-btn" id="shortcutsHintBtn" title="Shortcut keyboard (?)">Pintasan <code>?</code></button>
+      <button type="button" class="relock-btn" id="relockSiteBtn" title="Kunci kembali halaman dengan passcode">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="3" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+        <span>Kunci</span>
+      </button>
       <span>© 2026 Zandevaa. A personal music story.</span>
     </div>
   </footer>
@@ -307,6 +347,7 @@
             <span class="seek-tooltip" id="seekTooltip" aria-hidden="true">0:00</span>
             <div class="seek-visual" aria-hidden="true">
               <div class="seek-rail">
+                <div class="seek-ab-range" id="seekAbRange" hidden></div>
                 <div class="seek-fill"></div>
               </div>
               <div class="seek-thumb"></div>
@@ -443,7 +484,7 @@
           <div class="seek-control" id="sheetSeekControl" style="--progress: 0%">
             <span class="seek-tooltip" id="sheetSeekTooltip" aria-hidden="true">0:00</span>
             <div class="seek-visual" aria-hidden="true">
-              <div class="seek-rail"><div class="seek-fill"></div></div>
+              <div class="seek-rail"><div class="seek-ab-range" id="sheetSeekAbRange" hidden></div><div class="seek-fill"></div></div>
               <div class="seek-thumb"></div>
             </div>
             <input id="sheetSeekBar" class="seek-bar" aria-label="Posisi lagu layar penuh" type="range" min="0" max="100" step="0.1" value="0" disabled />
@@ -474,8 +515,23 @@
           </button>
         </div>
 
+        <div class="np-extra-tools" role="group" aria-label="Fitur pemutaran tambahan">
+          <button class="np-pill-btn np-tool-chip" id="abLoopButton" type="button" aria-pressed="false" title="Ulang bagian reff / segmen A–B">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m17 2 4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4m14-1v2a4 4 0 0 1-4 4H3" /></svg>
+            <span id="abLoopLabel">A–B Reff</span>
+          </button>
+          <button class="np-pill-btn np-tool-chip" id="sheetBookmarkMomentBtn" type="button" title="Simpan detik saat ini sebagai momen favorit">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+            <span>Tandai Momen</span>
+          </button>
+          <button class="np-pill-btn np-tool-chip offline-pill" id="sheetOfflineButton" type="button" aria-pressed="false" title="Simpan lagu ini untuk diputar offline">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /></svg>
+            <span id="sheetOfflineLabel">Offline</span>
+          </button>
+        </div>
+
         <button class="np-upnext" id="upNextButton" type="button" aria-label="Putar lagu berikutnya">
-          <img class="np-upnext-thumb" id="upNextCover" src="assets/cover-lagu-kedua.png" alt="" />
+          <img class="np-upnext-thumb" id="upNextCover" src="assets/cover-lagu-kedua.webp" alt="" />
           <span class="np-upnext-meta">
             <small>SELANJUTNYA</small>
             <strong id="upNextTitle">S-Y-I-F-A (Always-on-My-Mind)</strong>
@@ -561,6 +617,11 @@
           <div class="card-ratio-toggle" role="group" aria-label="Rasio gambar">
             <button type="button" class="ratio-btn active" data-ratio="story">Story 9:16</button>
             <button type="button" class="ratio-btn" data-ratio="post">Feed 4:5</button>
+          </div>
+          <div class="card-style-toggle" role="group" aria-label="Gaya kartu lirik">
+            <button type="button" class="style-btn active" data-card-style="glass">Glass</button>
+            <button type="button" class="style-btn" data-card-style="polaroid">Polaroid</button>
+            <button type="button" class="style-btn" data-card-style="vinyl">Vinyl</button>
           </div>
           <canvas id="lyricCardCanvas" class="lyric-card-canvas" width="1080" height="1920"></canvas>
         </div>
@@ -659,6 +720,95 @@
     </div>
   </div>
 
+  <!-- First-Time Passcode Lock Gate (Glass Numpad + Desktop Keyboard Support) -->
+  <div class="passcode-gate" id="passcodeGate" role="dialog" aria-modal="true" aria-labelledby="passcodeTitle">
+    <form class="passcode-card" id="passcodeForm" autocomplete="off" novalidate>
+      <div class="passcode-lock-badge" id="passcodeLockBadge" aria-hidden="true">
+        <svg class="lock-closed-icon" viewBox="0 0 24 24">
+          <rect x="5" y="11" width="14" height="10" rx="3" />
+          <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+        </svg>
+        <svg class="lock-open-icon" viewBox="0 0 24 24">
+          <path d="m5 13 4 4L19 7" />
+        </svg>
+      </div>
+      <span class="passcode-eyebrow">✦ PRIVATE MUSIC STORIES</span>
+      <h2 class="passcode-title" id="passcodeTitle">Masukkan Passcode</h2>
+      <p class="passcode-subtitle">Halaman ini ditulis khusus untuk seseorang yang istimewa.</p>
+
+      <div class="passcode-input-wrap" id="passcodeInputWrap">
+        <div class="passcode-slots" id="passcodeSlots" aria-hidden="true">
+          <span class="passcode-slot"></span>
+          <span class="passcode-slot"></span>
+          <span class="passcode-slot"></span>
+          <span class="passcode-slot"></span>
+          <span class="passcode-slot"></span>
+          <span class="passcode-slot"></span>
+        </div>
+        <input
+          id="passcodeInput"
+          class="passcode-input"
+          type="tel"
+          inputmode="none"
+          maxlength="6"
+          readonly
+          tabindex="-1"
+          aria-label="Masukkan 6 digit passcode"
+        />
+      </div>
+
+      <p class="passcode-feedback" id="passcodeFeedback" role="status" aria-live="polite"></p>
+
+      <div class="passcode-numpad" id="passcodeNumpad" role="group" aria-label="Papan tombol angka passcode">
+        <button type="button" class="num-key" data-key="1">1</button>
+        <button type="button" class="num-key" data-key="2">2</button>
+        <button type="button" class="num-key" data-key="3">3</button>
+        <button type="button" class="num-key" data-key="4">4</button>
+        <button type="button" class="num-key" data-key="5">5</button>
+        <button type="button" class="num-key" data-key="6">6</button>
+        <button type="button" class="num-key" data-key="7">7</button>
+        <button type="button" class="num-key" data-key="8">8</button>
+        <button type="button" class="num-key" data-key="9">9</button>
+        <button type="button" class="num-key num-key-action" data-action="clear" aria-label="Hapus semua">C</button>
+        <button type="button" class="num-key" data-key="0">0</button>
+        <button type="button" class="num-key num-key-action" data-action="backspace" aria-label="Hapus satu angka">⌫</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Digital Liner Notes / Story Timeline Modal -->
+  <div class="modal-overlay" id="storyTimelineModal" hidden>
+    <div class="modal-card timeline-modal-card" role="dialog" aria-modal="true" aria-labelledby="timelineModalTitle">
+      <div class="modal-header">
+        <div>
+          <h3 id="timelineModalTitle">Liner Notes · Perjalanan Lagu</h3>
+          <p>Catatan singkat dan momen di balik setiap bab cerita musik ini.</p>
+        </div>
+        <button class="control-icon" id="closeTimelineModal" type="button" aria-label="Tutup">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <div class="recap-card" id="ourRecapCard"></div>
+      <div class="timeline-list" id="storyTimelineList"></div>
+    </div>
+  </div>
+
+  <!-- Secret Easter Egg Letter Modal -->
+  <div class="modal-overlay" id="secretLetterModal" hidden>
+    <div class="modal-card secret-letter-card" role="dialog" aria-modal="true" aria-labelledby="secretLetterTitle">
+      <div class="secret-letter-top">
+        <span class="passcode-eyebrow" id="secretLetterEyebrow">✦ SECRET LETTER · FOUND</span>
+        <button class="control-icon" id="closeSecretLetter" type="button" aria-label="Tutup">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <div class="secret-letter-symbol" aria-hidden="true">♡</div>
+      <h3 class="secret-letter-title" id="secretLetterTitle">Di balik setiap nada.</h3>
+      <div class="secret-letter-body" id="secretLetterBody"></div>
+      <span class="secret-letter-sign" id="secretLetterSign">— Zandevaa</span>
+    </div>
+  </div>
+
   <!-- Open Letter First-Visit Gate (Enables 1-Tap Autoplay on Mobile!) -->
   <div class="welcome-gate" id="welcomeGate" hidden>
     <div class="welcome-card" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
@@ -674,6 +824,28 @@
       </button>
       <button type="button" class="welcome-skip-btn" id="welcomeSkipBtn">Masuk tanpa memutar</button>
     </div>
+  </div>
+
+  <!-- Bookmark Favorite Moment Modal -->
+  <div class="modal-overlay" id="momentModal" hidden>
+    <form class="modal-card moment-modal-card" id="momentForm" role="dialog" aria-modal="true" aria-labelledby="momentModalTitle">
+      <div class="modal-header">
+        <div>
+          <h3 id="momentModalTitle">Simpan Momen Favorit</h3>
+          <p id="momentModalMeta">Tandai detik spesial pada lagu ini agar mudah diputar ulang.</p>
+        </div>
+        <button class="control-icon" id="closeMomentModal" type="button" aria-label="Tutup">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <div class="moment-time-badge" id="momentTimeBadge">♪ 0:00</div>
+      <label class="moment-note-label" for="momentNoteInput">Catatan singkat (opsional)</label>
+      <input id="momentNoteInput" class="moment-note-input" type="text" maxlength="60" placeholder="Mis. Bagian reff paling bikin senyum…" autocomplete="off" />
+      <div class="card-studio-footer">
+        <button type="button" class="card-action-secondary" id="cancelMomentBtn">Batal</button>
+        <button type="submit" class="card-action-primary" id="saveMomentBtn">Simpan Momen</button>
+      </div>
+    </form>
   </div>
 
   <!-- Desktop Keyboard Shortcuts Modal -->
@@ -694,6 +866,9 @@
         <li><span>Lagu Berikutnya / Sebelumnya</span><span><kbd>N</kbd> <kbd>P</kbd></span></li>
         <li><span>Buka / Tutup Now Playing</span><kbd>L</kbd></li>
         <li><span>Mode Vinyl / Cover</span><kbd>V</kbd></li>
+        <li><span>Tema Auto / Gelap / Terang</span><kbd>T</kbd></li>
+        <li><span>Ulang Bagian Reff (A–B Loop)</span><kbd>A</kbd></li>
+        <li><span>Tandai Momen Favorit</span><kbd>B</kbd></li>
         <li><span>Simpan Favorit</span><kbd>F</kbd></li>
         <li><span>Bisukan / Suarakan</span><kbd>M</kbd></li>
         <li><span>Tutup Modal / Layar Penuh</span><kbd>Esc</kbd></li>
